@@ -1,0 +1,93 @@
+
+This component contains software that is Copyright (c) 2016 RDK Management.
+The component is licensed to you under the Apache License, Version 2.0 (the "License").
+You may not use the component except in compliance with the License.
+
+The component may include material which is licensed under other licenses / copyrights as
+listed below. Your use of this material within the component is also subject to the terms and
+conditions of these licenses. The LICENSE file contains the text of all the licenses which apply
+within this component.
+
+There are directories within this component (framework/web-app/fileStore/lightning-apps/tdkanimations/static/testimages ,
+framework/web-app/fileStore/lightning-apps/tdkmultianimations/static/testimages ,
+framework/web-app/fileStore/lightning-apps/tdkobjectanimations/static/testimages) containing images
+which are licensed under the Pixabay license. These directories each contain their own license file,
+called LICENSE, which describes the licensing of the material under each directory.
+
+Copyright 2009 Allan Jardine. All Rights Reserved.
+Datatables is licensed under the MIT license
+
+Copyright 2018 SoftAtHome
+Licensed under the Apache License, Version 2.0
+
+Copyright 2013,2014 jQuery Foundation and other contributors Licensed MIT
+
+Copyright (c) 2010 Eric Martin - http://ericmmartin.com
+Licensed under the MIT license
+
+Copyright 2008-2010 Allan Jardine, all rights reserved.
+ This source file is free software, under either the GPL v2 license or a
+ BSD style license, as supplied with this software. In this case licensed under the BSD-3 license.
+
+Copyright 2012 Igor Vaynberg
+ Licensed under the Apache License, Version 2.0 (the ""License""); 
+
+"Copyright (c) 2013 Eric Martin
+Licensed under MIT and GPL". In this case licensed under the MIT license.
+
+"Author: Chris Domigan
+ Contributors: Dan G. Switzer, II
+Parts of this plugin are inspired by Joern Zaefferer's Tooltip plugin
+Dual licensed under the MIT and GPL licenses". In this case licensed under the MIT license.
+
+Copyright (c) 2008-2013  (<a href="http://www.cloudgen.cloudgravity.net">Cloudgen</a>)
+  Licensed under the MIT License
+
+Copyright (c) 2007 Jörn Zaefferer
+Dual licensed under the MIT and GPL licenses. In this case licensed under the MIT license.
+
+Copyright 2011, John Resig
+Dual licensed under the MIT or GPL Version 2 licenses.In this case licensed under the MIT license.
+
+Copyright 2011, The Dojo Foundation
+Released under the MIT, BSD, and GPL Licenses.In this case licensed under the MIT license.
+
+Copyright 2013 Klaus Hartl
+Released under the MIT license
+
+Copyright (C) 2004-2010 Alex Gorbatchev.
+Dual licensed under the MIT and GPL licenses.In this case licensed under the MIT license.
+
+Copyright 1999-2015 The Apache Software Foundation
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+Grails 2.3.0
+Copyright (c) 2013 Pivotal, Inc. All Rights Reserved.
+This product is licensed to you under the Apache License, Version 2.0 (the "License").  
+
+
+Copyright (c) 2004-2009 Rod Johnson, Juergen Hoeller, Keith Donald, Colin Sampaleanu, Rob
+Harrop, Alef Arendsen, Thomas Risberg, Darren Davison, Dmitriy Kopylenko, Mark Pollack,
+Thierry Templier, Erwin Vervaet, Portia Tung, Ben Hale, Adrian Colyer, John Lewis, Costin
+Leau, Mark Fisher, Sam Brannen, Ramnivas Laddad, Arjen Poutsma, Chris Beams, Tareq
+Abedrabbo, Andy Clement
+This product includes software developed by
+the Apache Software Foundation (http://www.apache.org).
+
+Copyright (c) 2009-2013 Chris Leonello
+This component includes some software developed as part of jqPlot
+Here licensed under the MIT License.
+
+Copyright (C) 2007 Apple Inc.  All rights reserved.
+Licensed under the BSD-2 license
+
+Roboto Regular font is:
+Copyright 2017 Google Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0
+
+Copyright (c) codemirror by Marijn Haverbeke and others
+Distributed under an MIT license: https://codemirror.net/LICENSE
+
+pxCore is CopyRight 2007-2009 John Robinson
+Licensed under the Apache License, Version 2.0

@@ -28,6 +28,9 @@ else
   #Check if APP specified exists
   if [ -f $TEST ]; then
     $TEST 0 &
+  elif which $TEST >/dev/null; then
+    #Execute APP in Background
+    $TEST &
   else
     echo "No App present"
   fi

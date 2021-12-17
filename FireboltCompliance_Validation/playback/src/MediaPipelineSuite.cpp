@@ -41,6 +41,11 @@ using namespace std;
 #define BUFFER_SIZE_SHORT		264
 #define NORMAL_PLAYBACK_RATE		1.0
 #define FCS_MICROSECONDS		1000000
+#define PlaySeconds(seconds)            main_loop = g_main_loop_new(NULL, FALSE); \
+			                callback_timeout = seconds; \
+                                        g_timeout_add_seconds(1, timeout_callback , main_loop);\
+                                        g_main_loop_run(main_loop); \
+                                        g_main_loop_unref(main_loop);
 
 
 char tcname[BUFFER_SIZE_SHORT] = {'\0'};
@@ -55,6 +60,8 @@ bool checkAVStatus = false;
 int play_timeout = 10; 
 int SecondChannelTimeout =0;
 bool ChannelChangeTest = false;
+int callback_timeout;
+GMainLoop *main_loop;
 
 /* 
  * Playbin flags 
@@ -92,6 +99,19 @@ typedef struct CustomData {
     gboolean stateChanged;              /* Variable to indicate if stateChange is occured */
     gboolean streamStart;               /* Variable to indicate start of new stream */
 } MessageHandlerData;
+
+gboolean timeout_callback(gpointer loop)
+{
+    static int i = 0;
+    i++;
+    if (callback_timeout == i)
+    {
+        g_main_loop_quit( (GMainLoop*)main_loop );
+        return FALSE;
+    }
+    return TRUE;
+}
+
 
 
 /*
@@ -238,6 +258,7 @@ Return:               - None
 static void setRate (GstElement* playbin, gdouble rate)
 {
     gint64 currentPosition = GST_CLOCK_TIME_NONE;
+
     /*
      * Get the current playback position
      */
@@ -272,6 +293,7 @@ static void setRate (GstElement* playbin, gdouble rate)
     	fail_unless (gst_element_seek (playbin, rate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, currentPosition,
     			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to set playback rate");
     }
+
 }
 
 
@@ -494,7 +516,7 @@ static void trickplayOperation (GstElement* playbin, gdouble rate, double timeou
     /*
      * Sleep for the requested time
      */
-    usleep (timeout * FCS_MICROSECONDS);
+    PlaySeconds (timeout );
     /*
      * Retrieve the current playback rate of pipeline and verify that its same as rate
      */
@@ -630,7 +652,7 @@ GST_START_TEST (test_generic_playback)
     /*
      * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
      */
-    sleep (play_timeout);
+    PlaySeconds(play_timeout);
     /*
      * Check if the first frame received flag is set
      */
@@ -708,7 +730,7 @@ GST_START_TEST (test_generic_playback)
        /*
         * Wait for 'SecondChannelTimeout' seconds(received as the input argument) for video to play
         */
-       sleep(SecondChannelTimeout);
+       PlaySeconds(SecondChannelTimeout);
 
        if (playbin)
        {
@@ -785,7 +807,7 @@ GST_START_TEST (test_play_pause_pipeline)
      * Wait for 'play_timeout' seconds(recieved as the input argument) before chaging the pipeline state
      * We are waiting for 5 more seconds before checking pipeline status, so reducing the wait here
      */
-    sleep (play_timeout - 5);
+    PlaySeconds(play_timeout - 5);
     /*
      * Ensure that playback is happening before pausing the pipeline
      */
@@ -810,7 +832,7 @@ GST_START_TEST (test_play_pause_pipeline)
     /*
      * Wait for 5 seconds before checking the pipeline status
      */
-    sleep(5);
+    PlaySeconds(5);
     fail_unless_equals_int (gst_element_get_state (playbin, &cur_state,
             NULL, 0), GST_STATE_CHANGE_SUCCESS);
     GST_LOG("\n********Current state: %s\n",gst_element_state_get_name(cur_state));
@@ -891,7 +913,7 @@ GST_START_TEST (test_EOS)
     /*
      * Wait for 5 seconds before checking AV status
      */
-    sleep (5);
+    PlaySeconds (5);
     /*
      * Check if the first frame received flag is set
      */
@@ -999,7 +1021,7 @@ GST_START_TEST (test_trickplay)
     /*
      * Wait for 5 seconds before verifying the playback status
      */
-    sleep(5);
+    PlaySeconds(5);
     /*
      * Ensure that playback is happening before starting trickplay
      */
@@ -1115,7 +1137,7 @@ GST_START_TEST (test_trickplay)
 	    		/*
 	    		 * Sleep for the requested time
 	    		 */
-	    		usleep (operationTimeout * FCS_MICROSECONDS);
+	    		PlaySeconds (operationTimeout );
 		    }
 		    /*
 		     * If playback is already happening wait for the requested time
@@ -1123,7 +1145,7 @@ GST_START_TEST (test_trickplay)
 		    else
 	 	    {
                         printf ("Playbin is already playing, so waiting for %f seconds\n", operationTimeout);
-			usleep (operationTimeout * FCS_MICROSECONDS);
+			PlaySeconds (operationTimeout );
 		    }
 		    /*
                      * Ensure that playback is happening properly
@@ -1151,7 +1173,7 @@ GST_START_TEST (test_trickplay)
 	    	    /*
 	    	     * Sleep for the requested time
 	    	     */
-	    	    usleep (operationTimeout * FCS_MICROSECONDS);
+	    	    PlaySeconds (operationTimeout );
 		}
 	        /*
                  * If the operation is to do seek in the pipeline
@@ -1170,7 +1192,7 @@ GST_START_TEST (test_trickplay)
                     /*
                      * Sleep for the requested time seconds
                      */
-                    usleep (operationTimeout * FCS_MICROSECONDS);
+                    PlaySeconds (operationTimeout );
 		    /*
                      * Ensure that playback is happening properly
                      */

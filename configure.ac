@@ -319,6 +319,23 @@ AC_ARG_ENABLE([hdmicechal],
            [echo "hdmicechal component is not enabled"])
 AM_CONDITIONAL([HDMICECHAL], [test x$HDMICECHAL = xtrue])
 
+AC_ARG_ENABLE([westeroshal],
+         AS_HELP_STRING([--enable-westeroshal],[enable westeroshal (default is no)]),
+         [
+           case "${enableval}" in
+              yes) WESTEROSHAL=true
+                   AS_IF([test x$HYBRID = xtrue], [SUBDIR_HYBRID+=" WesterosHal_stub "],
+                          [echo WesterosHal enabled in Hybrid])
+                   AS_IF([test x$CLIENT = xtrue], [SUBDIR_CLIENT+=" WesterosHal_stub "],
+                          [echo WesterosHal enabled in Client]) ;;
+             no) WESTEROSHAL=false ;;
+            *) AC_MSG_ERROR([bad value ${enableval} for --enable-westeroshal ]) ;;
+             esac
+            ],
+           [echo "westeroshal component is not enabled"])
+AM_CONDITIONAL([WESTEROSHAL], [test x$WESTEROSHAL = xtrue])
+
+
 AC_ARG_ENABLE([xupnp],
          AS_HELP_STRING([--enable-xupnp],[enable xupnp (default is no)]),
          [
@@ -414,5 +431,6 @@ AC_CONFIG_FILES([Makefile
          DeepSleepHal_stub/Makefile
          PowerMgrHal_stub/Makefile
          HdmicecHal_stub/Makefile
-	 WIFIHAL_stub/Makefile])
+	 WIFIHAL_stub/Makefile
+	 WesterosHal_stub/Makefile])
 AC_OUTPUT

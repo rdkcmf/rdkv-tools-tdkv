@@ -37,6 +37,7 @@
 #define TEST_FAILURE false
 
 #define BT_ADAPTER_STR_LEN 64
+#define BT_DEVICE_NAME 50
 
 using namespace std;
 

@@ -63,11 +63,12 @@ int play_timeout = 10;
 int Runforseconds;
 auto start = std::chrono::steady_clock::now();
 bool latency_check_test = false;
-int latencyThreshold = 100;
 int SecondChannelTimeout =0;
 bool ChannelChangeTest = false;
-GstClockTime timestamp, latency;
+GstClockTime timestamp, latency, time_elapsed;
 bool firstFrameReceived = false;
+bool audioChanged = false;
+bool videoChanged = false;
 
 /* 
  * Playbin flags 
@@ -104,6 +105,15 @@ typedef struct CustomData {
     gboolean eosDetected;		/* Variable to indicate if EOS is detected */
     gboolean stateChanged;              /* Variable to indicate if stateChange is occured */
     gboolean streamStart;               /* Variable to indicate start of new stream */
+    gboolean setRateOperation;          /* Variable which indicates setRate operation is carried out */
+    gdouble setRate;                    /* Variable to indicate the playback rate to be set */
+    gdouble currentRate;                /* Variable to store the current playback rate of the pipeline */
+    gint n_text;                        /* Number of embedded text streams */
+    gint n_audio;                       /* Number of embedded audio streams */
+    gint n_video;                       /* Number of embedded video streams */
+    gint current_video;                 /* Currently playing video streams */
+    gint current_text;                  /* Currently playing text stream */
+    gint current_audio;                 /* Currently playing audio stream */
 } MessageHandlerData;
 
 /*
@@ -143,6 +153,96 @@ bool getstreamingstatus(char* script)
     {
         return false;
     }
+}
+
+static void parselatency()
+{
+    printf("\nLatency = %" GST_TIME_FORMAT"\n",GST_TIME_ARGS(latency));
+    latency = GST_TIME_AS_MSECONDS(latency);
+    printf("\nLatency = %lld milliseconds\n", latency);
+    /*
+     * Writing to file
+     */
+    FILE *filePointer ;
+    char latency_file[BUFFER_SIZE_SHORT] = {'\0'};
+    strcat (latency_file, TDK_PATH);
+    strcat (latency_file, "/latency_log");
+    filePointer = fopen(latency_file, "w");
+    if (filePointer != NULL)
+    {
+        fprintf(filePointer,"Latency = %lld milliseconds\n", latency);
+    }
+    else
+    {
+	printf("\nLatency writing operation failed\n");
+    }
+    fclose(filePointer);
+}
+
+/* Print a tag in a human-readable format (name: value) */
+static void print_tag_foreach (const GstTagList *tags, const gchar *tag, gpointer user_data) 
+{
+    GValue val = { 0, };
+    gchar *str;
+    gint depth = GPOINTER_TO_INT (user_data);
+
+    gst_tag_list_copy_value (&val, tags, tag);
+
+    if (G_VALUE_HOLDS_STRING (&val))
+        str = g_value_dup_string (&val);
+    else
+        str = gst_value_serialize (&val);
+
+    g_print ("%*s%s: %s\n", 2 * depth, " ", gst_tag_get_nick (tag), str);
+    g_free (str);
+
+    g_value_unset (&val);
+}
+
+static void analyze_stream (MessageHandlerData *data) 
+{
+    gint i;
+    GstTagList *tags;
+
+    /* Read some properties */
+    g_object_get (data->playbin, "n-video", &data->n_video, NULL);
+    g_object_get (data->playbin, "n-audio", &data->n_audio, NULL);
+
+    g_print ("Stream contains %d audio stream(s)\n",data->n_audio);
+
+    /* Retrieve the stream's video tags
+    g_print ("\n");
+    for (i = 0; i < data->n_video; i++) 
+    {
+        tags = NULL;
+        g_signal_emit_by_name (data->playbin, "get-video-tags", i, &tags);
+        if (tags) 
+	{
+           g_print ("Tags:\n");
+           gst_tag_list_foreach (tags, print_tag_foreach, GINT_TO_POINTER (1));
+           gst_tag_list_free (tags);
+        }
+    }*/
+
+    g_print ("\n");
+    for (i = 0; i < data->n_audio; i++) 
+    {
+        tags = NULL;
+        /* Retrieve the stream's audio tags */
+        g_signal_emit_by_name (data->playbin, "get-audio-tags", i, &tags);
+        if (tags) 
+	{
+            g_print ("Tags:\n");
+            gst_tag_list_foreach (tags, print_tag_foreach, GINT_TO_POINTER (1));
+            gst_tag_list_free (tags);
+        }
+    }
+
+
+    g_object_get (data->playbin, "current-audio", &data->current_audio, NULL);
+
+    g_print ("\n");
+    g_print ("Currently playing audio stream %d \n", data->current_audio);
 }
 
 
@@ -190,7 +290,6 @@ static void firstFrameCallback(GstElement *sink, guint size, void *context, gpoi
    *gotFirstFrameSignal = true;
 }
 
-
 /********************************************************************************************************************
 Purpose:               Method to handle the different messages from gstreamer bus
 Parameters:
@@ -202,6 +301,7 @@ static void handleMessage (MessageHandlerData *data, GstMessage *message)
 {
     GError *err;
     gchar *debug_info;
+    GstQuery *query;
 
     switch (GST_MESSAGE_TYPE (message)) 
     {
@@ -226,12 +326,27 @@ static void handleMessage (MessageHandlerData *data, GstMessage *message)
         case GST_MESSAGE_STATE_CHANGED:
             data->stateChanged = TRUE;
         case GST_MESSAGE_ASYNC_DONE:
-            fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &(data->currentPosition)), 
-                                                     "Failed to querry the current playback position");
-            //Added GST_SECOND buffer time between currentPosition and seekPosition
-            if (abs( data->currentPosition - data->seekPosition) <= (GST_SECOND))
+	    if (data->setRateOperation == TRUE)
             {
-               data->seeked = TRUE;
+               query = gst_query_new_segment (GST_FORMAT_DEFAULT);
+               fail_unless (gst_element_query (data->playbin, query), "Failed to query the current playback rate");
+               gst_query_parse_segment (query, &(data->currentRate), NULL, NULL, NULL);
+               if (data->setRate == data->currentRate)
+               {
+                   time_elapsed = gst_clock_get_time ((data->playbin)->clock);
+                   data->seeked = TRUE;
+               }
+            }
+            else
+            {
+               fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &(data->currentPosition)),
+                                                     "Failed to querry the current playback position");
+               //Added GST_SECOND buffer time between currentPosition and seekPosition
+               if (abs( data->currentPosition - data->seekPosition) <= (GST_SECOND))
+               {
+                   data->seeked = TRUE;
+                   time_elapsed = gst_clock_get_time ((data->playbin)->clock);
+               }
             }
             break;
         case GST_MESSAGE_STREAM_START:
@@ -366,20 +481,7 @@ GST_START_TEST (test_generic_playback)
     if (latency_check_test)
     {
          latency = timestamp - gst_element_get_base_time (GST_ELEMENT_CAST (westerosSink));
-         printf("\nLatency = %" GST_TIME_FORMAT"\n",GST_TIME_ARGS(latency));
-	 latency = GST_TIME_AS_MSECONDS(latency);
-	 printf("\nLatency = %lld milliseconds\n", latency);
-	 /*
-          * Writing to file
-          */
-         FILE *filePointer ;
-         char latency_file[BUFFER_SIZE_SHORT] = {'\0'};
-         strcat (latency_file, TDK_PATH);
-         strcat (latency_file, "/latency_log");
-         filePointer = fopen(latency_file, "w");
-         fprintf(filePointer,"Latency = %lld milliseconds\n", latency);
-         fclose(filePointer);
-	 fail_unless(latency < latencyThreshold, "FAILURE : Latency is higher than latencyThreshold");
+	 parselatency();
     }
     /*
      * Check for AV status if its enabled
@@ -894,6 +996,7 @@ GST_START_TEST (test_trickplay)
 		    /*
                      * Set the playback position to the seekSeconds position
                      */
+		    timestamp = gst_clock_get_time ((playbin)->clock);
                     fail_unless (gst_element_seek (playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
                                    GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, seekPosition,
                                    GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to seek");
@@ -933,6 +1036,12 @@ GST_START_TEST (test_trickplay)
 		    /* Verify that SEEK message is received */
                     fail_unless (TRUE == data.seeked, "Seek Unsuccessfull\n");
 
+		    if (latency_check_test)
+                    {
+                        latency = time_elapsed - timestamp;
+			parselatency();
+                    }
+
 		    /* Verify that stateChanged message is received */
                     fail_unless (TRUE == data.stateChanged, "State change message was not received\n");
 
@@ -969,6 +1078,7 @@ GST_START_TEST (test_trickplay)
                     /*
                      * Rewind the pipeline if rate is a negative number
                      */
+		    timestamp = gst_clock_get_time ((playbin)->clock);
                     if (rate < 0)
                     {
                        fail_unless (gst_element_seek (playbin, rate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
@@ -982,18 +1092,47 @@ GST_START_TEST (test_trickplay)
                        fail_unless (gst_element_seek (playbin, rate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, currentPosition,
                          GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to set playback rate");
                     }
+		    bus = gst_element_get_bus (playbin);
+                    data.terminate = FALSE;
+                    data.seeked = FALSE;
+                    data.setRateOperation = TRUE;
+                    data.setRate = rate;
+                    data.currentRate = 0.0;
+                    data.playbin = playbin;
+                    data.currentPosition = GST_CLOCK_TIME_NONE;
+                    data.stateChanged = FALSE;
+                    do
+                    {
+                        message = gst_bus_timed_pop_filtered (bus, 2 * GST_SECOND,
+                                             (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
+                                             (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
+                                             (GstMessageType) GST_MESSAGE_ASYNC_DONE ));
+                        if (NULL != message)
+                        {
+                            handleMessage (&data, message);
+                        }
+                        else
+                        {
+                            printf ("All messages are clear. No more message after seek\n");
+                            break;
+                        }
+                    } while (!data.terminate && !data.seeked);
+
+		    fail_unless (data.setRate == data.currentRate, "Failed to do set rate to %f correctly\nCurrent playback rate is: %f\n", data.setRate, data.currentRate);
+		    printf ("Rate is set to %s %dx speed\nPlaying for %f seconds",(rate > 0)?"fastforward":"rewind", (int)abs (rate),timeout);
+		    if (latency_check_test)
+		    {
+			latency = time_elapsed - timestamp;
+			parselatency();
+		    }
 		    PlaySeconds(timeout);
-		    query = gst_query_new_segment (GST_FORMAT_DEFAULT);
-                    fail_unless (gst_element_query (playbin, query), "Failed to query the current playback rate");
-	            gst_query_parse_segment (query, &currentRate, NULL, NULL, NULL);
-		    fail_unless (rate == currentRate, "Failed to do set rate to %f correctly\nCurrent playback rate is: %f\n", rate, currentRate);
 		    printf ("Successfully executed %s %dx speed for %f seconds\n", (rate > 0)?"fastforward":"rewind", (int)abs (rate), timeout);
 		}
 	        if ("play" == operation)
                 {
 		    /*
 		     * If pipeline is already in playing state with normal playback rate (1.0),
-		     * just wait for operationTimeout seconds, instaed os setting the pipeline to playing state again
+		     * just wait for operationTimeout seconds, instead os setting the pipeline to playing state again
 		     */	
 		    fail_unless_equals_int (gst_element_get_state (playbin, &cur_state,
                                                                    NULL, 0), GST_STATE_CHANGE_SUCCESS);
@@ -1075,6 +1214,111 @@ GST_START_TEST (test_trickplay)
 }
 GST_END_TEST;
 
+/********************************************************************************************************************
+ * Purpose      : Test to do audio change during playback using playbin element and westeros-sink
+ * Parameters   : Audio Change during playback
+ ********************************************************************************************************************/
+GST_START_TEST (test_audio_change)
+{
+    bool is_av_playing = false;
+    GstElement *playbin;
+    GstElement *westerosSink;
+    gint flags;
+    MessageHandlerData data;
+
+    /*
+     * Create the playbin element
+     */
+    playbin = gst_element_factory_make(PLAYBIN_ELEMENT, NULL);
+    fail_unless (playbin != NULL, "Failed to create 'playbin' element");
+    /*
+     * Set the url received from argument as the 'uri' for playbin
+     */
+    fail_unless (m_play_url != NULL, "Playback url should not be NULL");
+    g_object_set (playbin, "uri", m_play_url, NULL);
+    /*
+     * Update the current playbin flags to enable Video and Audio Playback
+     */
+    g_object_get (playbin, "flags", &flags, NULL);
+    flags |= GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
+    g_object_set (playbin, "flags", flags, NULL);
+
+    /*
+     * Set westros-sink
+     */
+    westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
+    fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+
+    /*
+     * Link the westeros-sink to playbin
+     */
+    g_object_set (playbin, "video-sink", westerosSink, NULL);
+
+    /*
+     * Set the first frame recieved callback
+     */
+    g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
+    /*
+     * Set the firstFrameReceived variable as false before starting play
+     */
+    firstFrameReceived= false;
+
+    /*
+     * Set playbin to PLAYING
+     */
+    GST_FIXME( "Setting to Playing State\n");
+    fail_unless (gst_element_set_state (playbin, GST_STATE_PLAYING) !=  GST_STATE_CHANGE_FAILURE);
+    GST_FIXME( "Set to Playing State\n");
+
+    PlaySeconds(5);
+    /*
+     * Check if the first frame received flag is set
+     */
+    fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+    data.playbin = playbin;
+    analyze_stream(&data);
+    fail_unless (1 != data.n_audio,"Stream has only 1 audio stream. Audio Change requires minimum of two audio streams");
+    printf("Current Audio is %d", data.current_audio);
+
+    /*
+     * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
+     */
+    PlaySeconds(play_timeout);
+
+    for( int index=0; index < data.n_audio; index++)
+    {
+         if( index != data.current_audio)
+         {
+             printf("\nSwitching to %d audio stream\n", index);
+             printf("\nSetting current-audio to %d\n",index);
+             g_object_set (data.playbin, "current-audio", index, NULL);
+             // Waiting for audio switch
+             g_object_get (data.playbin, "current-audio", &data.current_audio, NULL);
+             fail_unless(data.current_audio == index, "FAILED : Unable to switch to %d audio stream",index);
+	     PlaySeconds(5);
+             printf("\nSUCCESS : Switched to audio stream %d, Playing for %d seconds\n",index,play_timeout);
+	     PlaySeconds(play_timeout);
+         }
+    }
+    /*
+     * Check for AV status if its enabled
+     */
+    if (true == checkAVStatus)
+    {
+        is_av_playing = check_for_AV_status();
+        fail_unless (is_av_playing == true, "Video is not playing in TV");
+    }
+    GST_LOG("DETAILS: SUCCESS, Video playing successfully for all audio streams\n");
+    if (playbin)
+    {
+       fail_unless (gst_element_set_state (playbin, GST_STATE_NULL) !=  GST_STATE_CHANGE_FAILURE);
+    }
+    /*
+     * Cleanup after use
+     */
+    gst_object_unref (playbin);
+}
+GST_END_TEST;
 
 
 static Suite *
@@ -1133,10 +1377,23 @@ media_pipeline_suite (void)
        GST_INFO ("tc test_channel_change_playback run successfull\n");
        GST_INFO ("SUCCESS\n");
     }
-    else if (strcmp ("test_latency", tcname) == 0)
+    else if (strcmp ("test_playback_latency", tcname) == 0)
     {
        latency_check_test = true;
        tcase_add_test (tc_chain, test_generic_playback);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_trickplay_latency", tcname) == 0)
+    {
+       latency_check_test = true;
+       tcase_add_test (tc_chain, test_trickplay);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_audio_change", tcname) == 0)
+    {
+       tcase_add_test (tc_chain, test_audio_change);
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
@@ -1183,7 +1440,9 @@ int main (int argc, char **argv)
 	if ((strcmp ("test_init_shutdown", tcname) == 0) || 
 	    (strcmp ("test_play_pause_pipeline", tcname) == 0) || 
             (strcmp ("test_generic_playback", tcname) == 0) ||
-            (strcmp ("test_latency", tcname) == 0) ||
+            (strcmp ("test_playback_latency", tcname) == 0) ||
+            (strcmp ("test_audio_change", tcname) == 0) ||
+            (strcmp ("test_trickplay_latency", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0) ||
             (strcmp("test_trickplay", tcname) == 0))
 	{
@@ -1198,11 +1457,6 @@ int main (int argc, char **argv)
                 {
                     strtok (argv[arg], "=");
       		    play_timeout = atoi (strtok (NULL, "="));
-                }
-		if (strstr (argv[arg], "latencyThreshold=") != NULL)
-                {
-                    strtok (argv[arg], "=");
-                    latencyThreshold = atoi (strtok (NULL, "="));
                 }
                 if (strstr (argv[arg], "operations=") != NULL)
 		{

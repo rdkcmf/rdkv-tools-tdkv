@@ -179,27 +179,27 @@ static void parselatency()
     fclose(filePointer);
 }
 
-/* Print a tag in a human-readable format (name: value) */
-static void print_tag_foreach (const GstTagList *tags, const gchar *tag, gpointer user_data) 
+/* Print all propeties of the stream represented in the tag */
+static void printTag (const GstTagList *tagList, const gchar *tag_char, gpointer custom_data)
 {
-    GValue val = { 0, };
-    gchar *str;
-    gint depth = GPOINTER_TO_INT (user_data);
+    GValue value = { 0, };
+    gint depth = GPOINTER_TO_INT (custom_data);
+    gchar *Data;
 
-    gst_tag_list_copy_value (&val, tags, tag);
+    gst_tag_list_copy_value (&value, tagList, tag_char);
 
-    if (G_VALUE_HOLDS_STRING (&val))
-        str = g_value_dup_string (&val);
+    if (G_VALUE_HOLDS_STRING (&value))
+        Data = g_value_dup_string (&value);
     else
-        str = gst_value_serialize (&val);
+        Data = gst_value_serialize (&value);
 
-    g_print ("%*s%s: %s\n", 2 * depth, " ", gst_tag_get_nick (tag), str);
-    g_free (str);
+    g_print ("%*s%s: %s\n", 2 * depth, " ", gst_tag_get_nick (tag_char), Data);
+    g_free (Data);
 
-    g_value_unset (&val);
+    g_value_unset (&value);
 }
 
-static void analyze_stream (MessageHandlerData *data) 
+static void getStreamProperties (MessageHandlerData *data)
 {
     gint i;
     GstTagList *tags;
@@ -219,7 +219,7 @@ static void analyze_stream (MessageHandlerData *data)
         if (tags) 
 	{
            g_print ("Tags:\n");
-           gst_tag_list_foreach (tags, print_tag_foreach, GINT_TO_POINTER (1));
+           gst_tag_list_foreach (tags, printTag, GINT_TO_POINTER (1));
            gst_tag_list_free (tags);
         }
     }*/
@@ -233,7 +233,7 @@ static void analyze_stream (MessageHandlerData *data)
         if (tags) 
 	{
             g_print ("Tags:\n");
-            gst_tag_list_foreach (tags, print_tag_foreach, GINT_TO_POINTER (1));
+            gst_tag_list_foreach (tags, printTag, GINT_TO_POINTER (1));
             gst_tag_list_free (tags);
         }
     }
@@ -1060,6 +1060,7 @@ GST_START_TEST (test_trickplay)
 		if (rate != currentRate)
 		{
                     GST_LOG ("Setting the playback rate to %f\n", rate);
+		    PlaySeconds(5);
 		    currentPosition = GST_CLOCK_TIME_NONE;
 		    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
 
@@ -1127,6 +1128,7 @@ GST_START_TEST (test_trickplay)
 		    }
 		    PlaySeconds(timeout);
 		    printf ("Successfully executed %s %dx speed for %f seconds\n", (rate > 0)?"fastforward":"rewind", (int)abs (rate), timeout);
+		    gst_object_unref (bus);
 		}
 	        if ("play" == operation)
                 {
@@ -1276,7 +1278,7 @@ GST_START_TEST (test_audio_change)
      */
     fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
     data.playbin = playbin;
-    analyze_stream(&data);
+    getStreamProperties(&data);
     fail_unless (1 != data.n_audio,"Stream has only 1 audio stream. Audio Change requires minimum of two audio streams");
     printf("Current Audio is %d", data.current_audio);
 

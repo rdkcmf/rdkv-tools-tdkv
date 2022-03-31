@@ -2,7 +2,7 @@
 # If not stated otherwise in this file or this component's Licenses.txt
 # file the following copyright and licenses apply:
 #
-# Copyright 2021 RDK Management
+# Copyright 2022 RDK Management
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,5 +16,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ##########################################################################
-SUBDIRS = playback graphics_validation GStreamer_plugins_test
-DIST_SUBDIRS = @SUBDIRS@
+
+ACLOCAL_AMFLAGS = -Im4 --install
+AM_CPPFLAGS = -DRDK_BR_2DOT0 ${COPTS} -std=c++0x -fPIC
+INCLUDES = -I${PKG_CONFIG_SYSROOT_DIR}$(includedir)
+AM_CXXFLAGS = -I${top_srcdir}/FireboltCompliance_Validation/GStreamer_plugins_test/include -I${top_srcdir}/agent/include
+lib_LTLIBRARIES = libfirebolt_compliancestub.la
+libfirebolt_compliancestub_la_SOURCES = src/pluginsteststub.cpp
+libfirebolt_compliancestub_la_includedir = ${includedir}
+libfirebolt_compliancestub_la_include_HEADERS = ${top_srcdir}/FireboltCompliance_Validation/GStreamer_plugins_test/include/pluginsteststub.h
+

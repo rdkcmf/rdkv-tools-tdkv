@@ -424,6 +424,7 @@ AC_CONFIG_FILES([Makefile
          FireboltCompliance_Validation/Makefile
 	 FireboltCompliance_Validation/playback/Makefile
 	 FireboltCompliance_Validation/graphics_validation/Makefile
+	 FireboltCompliance_Validation/GStreamer_plugins_test/Makefile
 	 AudioCaptureMgr_stub/Makefile
 	 USBCtrl_stub/Makefile
 	 SystemUtil_stub/Makefile

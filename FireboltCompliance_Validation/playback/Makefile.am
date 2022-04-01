@@ -32,3 +32,8 @@ bin_PROGRAMS = mediapipelinetests
 
 mediapipelinetests_SOURCES = src/MediaPipelineSuite.cpp
 mediapipelinetests_LDADD = $(GST_LIBS) $(GST_CHECK_LIBS) $(GLIBS) -ldl -lpthread -lgstreamer-1.0 -lgstcheck-1.0 -lgobject-2.0 -lglib-2.0
+
+bin_PROGRAMS += mediapipelinetests_trickplay
+
+mediapipelinetests_trickplay_SOURCES = src/mediapipelinetests_trickplay.cpp
+mediapipelinetests_trickplay_LDADD = $(GST_LIBS) $(GST_CHECK_LIBS) $(GLIBS) -ldl -lpthread -lgstreamer-1.0 -lgstcheck-1.0 -lgobject-2.0 -lglib-2.0

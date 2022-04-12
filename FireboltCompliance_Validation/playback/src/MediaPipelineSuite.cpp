@@ -68,6 +68,7 @@ int Runforseconds;
 auto start = std::chrono::steady_clock::now();
 bool latency_check_test = false;
 bool firstFrameReceived = false;
+bool use_fpsdisplaysink = true;
 int SecondChannelTimeout =0;
 bool ChannelChangeTest = false;
 GstClockTime timestamp, latency, time_elapsed;
@@ -135,21 +136,23 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    gint64 old_pts;
    gint pts_buffer=5;
    gint RanForTime=0;
-   gdouble current_rate;
+   GstElement *videoSinkFromPlaybin;
    GstElement *videoSink;
    GstState cur_state;
    gint play_jump = 0;
    gint previous_position = 0;
    gint jump_buffer = 3;
    GstStateChangeReturn state_change;
-
+   gint dropped_frames;
+   gint rendered_frames;
+   gint previous_rendered_frames;
+   float drop_rate;
 
    /* Update data variables */
    data.playbin = playbin;
    data.setRateOperation = FALSE;
    data.terminate = FALSE;
    data.eosDetected = FALSE;
-
 
    do
    {
@@ -161,9 +164,19 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 
    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
    fail_unless (state_change != GST_STATE_CHANGE_FAILURE, "Failed to get current playbin state");
-   g_object_get (playbin,"video-sink",&videoSink,NULL);
+   g_object_get (playbin,"video-sink",&videoSinkFromPlaybin,NULL);
 
-   if(checkPTS)
+   if (use_fpsdisplaysink)
+   {
+	//Get westerossink from fpsdisplaysink
+	g_object_get (videoSinkFromPlaybin, "video-sink",&videoSink,NULL);
+   }
+   else
+   {
+	videoSink = videoSinkFromPlaybin;
+   }
+
+   if (checkPTS)
    {
         g_object_get (videoSink,"video-pts",&pts,NULL);
         old_pts = pts;
@@ -178,7 +191,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
         do
         {
             Sleep(1);
-            printf("Current State is PAUSED , waiting for %d\n", RunSeconds);
+            printf("\nCurrent State is PAUSED , waiting for %d\n", RunSeconds);
 	    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
 	    play_jump = int(currentPosition/GST_SECOND) - previous_position;
             previous_position = (currentPosition/GST_SECOND);
@@ -202,6 +215,11 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
         return;
    }
 
+   if (use_fpsdisplaysink)
+   {
+	g_object_get (videoSinkFromPlaybin,"frames-rendered", &previous_rendered_frames, NULL);
+   }
+
    bus = gst_element_get_bus (playbin);
    do
    {
@@ -213,12 +231,23 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	play_jump = int(currentPosition/GST_SECOND) - previous_position;
 	printf("\nPlay jump = %d", play_jump);
 
+	if (use_fpsdisplaysink)
+	{
+	    g_object_get (videoSinkFromPlaybin,"frames-dropped",&dropped_frames,NULL);
+	    g_object_get (videoSinkFromPlaybin,"frames-rendered", &rendered_frames, NULL);
+	    fail_unless (rendered_frames > previous_rendered_frames, "Frames not rendered properly");
+	    drop_rate = ((float)dropped_frames/rendered_frames)*100;
+	    printf("\n\nDropped Frames %d \nRendered frames %d \nDrop Rate %f", dropped_frames, rendered_frames, drop_rate);
+	    previous_rendered_frames = rendered_frames;
+	}
+
 	if (play_jump != NORMAL_PLAYBACK_RATE)
             jump_buffer -=1;
 
         message = gst_bus_pop_filtered (bus, (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
                                              (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
                                              (GstMessageType) GST_MESSAGE_ASYNC_DONE ));
+
         /*
          * Parse message
          */
@@ -231,6 +260,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             printf ("All messages are clear. No more message after seek\n");
             break;
         }
+
 	if (checkPTS)
 	{
 	    g_object_get (videoSink,"video-pts",&pts,NULL);
@@ -241,9 +271,10 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             }
 
             fail_unless(pts_buffer != 0 , "Video is not playing according to video-pts check of westerosSink");
-	    fail_unless(jump_buffer != 0 , "Playback is not happenning at the expected rate");
 	    old_pts = pts;
 	}
+
+	fail_unless(jump_buffer != 0 , "Playback is not happening at the expected rate");
 	previous_position = (currentPosition/GST_SECOND);
    }while((difference <= RunSeconds) && !data.terminate && !data.eosDetected);
 
@@ -287,6 +318,37 @@ bool getstreamingstatus(char* script)
     {
         return false;
     }
+}
+
+/******************************************************************************************************************
+ * Purpose:                Callback function to get framerate info from fpsdisplaysink
+ *****************************************************************************************************************/
+static void FPSCallback (GstElement *fpsdisplaysink, gdouble fps, gdouble droprate, gdouble avgfps, gpointer udata)
+{
+   printf("\nDrop Rate:%lf \nCurrent FrameRate:%lf \nAvg Fps : %lf",droprate,fps,avgfps);
+}
+
+/******************************************************************************************************************
+ * Purpose:                Write Frame Rate info obtained from fpsdisplaysink to video_info file
+ *****************************************************************************************************************/
+static void writeFPSdata (GstElement *fpsdisplaysink)
+{
+   FILE *filePointer;
+   gchar *fps_msg;
+   char video_info[BUFFER_SIZE_SHORT] = {'\0'};
+   strcat (video_info, TDK_PATH);
+   strcat (video_info, "/video_info");
+   filePointer = fopen(video_info, "w");
+   if (filePointer != NULL)
+   {
+       g_object_get (G_OBJECT (fpsdisplaysink), "last-message", &fps_msg, NULL);
+       if (fps_msg != NULL)
+       {
+           g_print ("Frame info: %s\n", fps_msg);
+	   fprintf(filePointer,"%s\n", fps_msg);
+       }
+   }
+   fclose(filePointer);
 }
 
 static void parselatency()
@@ -553,11 +615,11 @@ GST_START_TEST (test_generic_playback)
     bool is_av_playing = false;
     GstElement *playbin;
     GstElement *westerosSink;
+    GstElement *fpssink;
     gint flags;
     GstMessage *message;
     GstBus *bus;
     MessageHandlerData data;
-    printf("\nWaiting for %d seconds",Runforseconds);
 
     /*
      * Create the playbin element
@@ -583,9 +645,25 @@ GST_START_TEST (test_generic_playback)
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
 
     /*
-     * Link the westeros-sink to playbin
+     * Link video-sink with playbin
      */
-    g_object_set (playbin, "video-sink", westerosSink, NULL);
+    if (use_fpsdisplaysink)
+    {
+        /*
+         * Create and link fpsdisplaysink if configuration is enabled
+         */
+        fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
+        fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
+        g_object_set (playbin, "video-sink",fpssink, NULL);
+        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        g_object_set (fpssink, "signal-fps-measurements", true, NULL);
+        g_object_set (fpssink, "fps-update-interval", 1000, NULL);
+        g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
+    }
+    else
+    {
+        g_object_set (playbin, "video-sink", westerosSink, NULL);
+    }
 
     /*
      * Set the first frame recieved callback
@@ -602,7 +680,7 @@ GST_START_TEST (test_generic_playback)
     GST_FIXME( "Setting to Playing State\n");
     fail_unless (gst_element_set_state (playbin, GST_STATE_PLAYING) !=  GST_STATE_CHANGE_FAILURE);
     GST_FIXME( "Set to Playing State\n");
- 
+
     WaitForOperation;
     /*
      * Check if the first frame received flag is set
@@ -613,6 +691,13 @@ GST_START_TEST (test_generic_playback)
      * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
      */
     PlaySeconds(playbin,play_timeout);
+    /*
+     * Write FrameRate info to video_info file
+     */
+    if (use_fpsdisplaysink)
+    {
+        writeFPSdata(fpssink);
+    }
     /*
      * Calculate latency by obtaining the sink base time
      */
@@ -719,6 +804,7 @@ GST_START_TEST (test_play_pause_pipeline)
     GstState cur_state;
     GstElement *playbin;
     GstElement *westerosSink;
+    GstElement *fpssink;
     
     /*
      * Create the playbin element
@@ -740,17 +826,33 @@ GST_START_TEST (test_play_pause_pipeline)
     g_object_set (playbin, "flags", flags, NULL);
 
     /*
-     * Set westros-sink
+     * Create westerosSink instance
      */
     westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
 
     /*
-     * Link the westeros-sink to playbin
+     * Link video-sink with playbin
      */
-    g_object_set (playbin, "video-sink", westerosSink, NULL);
+    if (use_fpsdisplaysink)
+    {
+	/*
+	 * Create and link fpsdisplaysink if configuration is enabled
+	 */
+        fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
+	fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
+        g_object_set (playbin, "video-sink",fpssink, NULL);
+        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        g_object_set (fpssink, "signal-fps-measurements", true, NULL);
+        g_object_set (fpssink, "fps-update-interval", 1000, NULL);
+        g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
+    }
+    else
+    {
+	g_object_set (playbin, "video-sink", westerosSink, NULL);
+    }
 
-     /*
+    /*
      * Set the first frame recieved callback
      */
     g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
@@ -767,6 +869,7 @@ GST_START_TEST (test_play_pause_pipeline)
     GST_FIXME( "Set to Playing State\n");
 
     WaitForOperation;
+
     /*
      * Check if the first frame received flag is set
      */
@@ -777,9 +880,16 @@ GST_START_TEST (test_play_pause_pipeline)
      * We are waiting for 5 more seconds before checking pipeline status, so reducing the wait here
      */
     PlaySeconds(playbin,play_timeout - 5);
+    int height;
+    int width;
+    g_object_get (westerosSink, "video-height", &height, NULL);
+    g_object_get (westerosSink, "video-width", &width, NULL);
+    printf("\nVideo height = %d\nVideo width = %d", height, width);
+
     /*
      * Ensure that playback is happening before pausing the pipeline
      */
+
     /*
      * Check for AV status if its enabled
      */
@@ -788,12 +898,13 @@ GST_START_TEST (test_play_pause_pipeline)
         is_av_playing = check_for_AV_status();
         fail_unless (is_av_playing == true, "Video is not playing in TV");
     }
-    printf ("DETAILS: SUCCESS, Video playing successfully \n");
+    printf ("\nDETAILS: SUCCESS, Video playing successfully\n");
 
     /*
      * Set pipeline to PAUSED
      */
     gst_element_set_state (playbin, GST_STATE_PAUSED);
+
     /*
      * Wait for 5 seconds before checking the pipeline status
      */
@@ -804,10 +915,20 @@ GST_START_TEST (test_play_pause_pipeline)
 
     fail_unless_equals_int (cur_state, GST_STATE_PAUSED);
     printf ("DETAILS: SUCCESS, Current state is: %s \n", gst_element_state_get_name(cur_state));
+
+    /*
+     * Write FrameRate info to video_info file
+     */
+    if (use_fpsdisplaysink)
+    {
+        writeFPSdata(fpssink);
+    }
+
     if (playbin)
     {
        gst_element_set_state(playbin, GST_STATE_NULL);
     }
+
     /*
      * Cleanup after use
      */
@@ -828,6 +949,7 @@ GST_START_TEST (test_EOS)
     gint flags;
     GstElement *playbin;
     GstElement *westerosSink;
+    GstElement *fpssink;
 
     /*
      * Create the playbin element
@@ -855,9 +977,25 @@ GST_START_TEST (test_EOS)
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
 
     /*
-     * Link the westeros-sink to playbin
+     * Link video-sink with playbin
      */
-    g_object_set (playbin, "video-sink", westerosSink, NULL);
+    if (use_fpsdisplaysink)
+    {
+        /*
+         * Create and link fpsdisplaysink if configuration is enabled
+         */
+        fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
+        fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
+        g_object_set (playbin, "video-sink",fpssink, NULL);
+        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        g_object_set (fpssink, "signal-fps-measurements", true, NULL);
+        g_object_set (fpssink, "fps-update-interval", 1000, NULL);
+        g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
+    }
+    else
+    {
+        g_object_set (playbin, "video-sink", westerosSink, NULL);
+    }
 
     /*
      * Set the first frame recieved callback
@@ -918,6 +1056,14 @@ GST_START_TEST (test_EOS)
     printf ("EOS Received\n");
     gst_message_unref (message);
 
+    /*
+     * Write FrameRate info to video_info file
+     */
+    if (use_fpsdisplaysink)
+    {
+        writeFPSdata(fpssink);
+    }
+
     if (playbin)
     {
        gst_element_set_state(playbin, GST_STATE_NULL);
@@ -930,6 +1076,117 @@ GST_START_TEST (test_EOS)
 }
 GST_END_TEST;
 
+GST_START_TEST (test_frameDrop)
+{
+    GstElement *pipeline, *source, *sink;
+    gchar *fps_msg;
+    GstBus *bus;
+    gint jump_buffer = 3;
+    gint play_jump = 0;
+    int rendered,dropped;
+    double current,average;
+    int previous_rendered_frames, rendered_frames;
+    gint64 currentPosition;
+    gint previous_position = 0;
+    gint difference;
+    gint64 startPosition;
+
+    /* Create the elements */
+    source = gst_element_factory_make ("videotestsrc", "source");
+    fail_unless (source != NULL, "Failed to create 'videotestsrc' element");
+    sink = gst_element_factory_make ("fpsdisplaysink", "sink");
+    fail_unless (sink  != NULL, "Failed to create 'fpsdisplaysink'  element");
+
+    /* Create the empty pipeline */
+    pipeline = gst_pipeline_new ("test-pipeline");
+    fail_unless (pipeline != NULL, "Failed to create 'pipeline'");
+
+    /* Build the pipeline */
+    gst_bin_add_many (GST_BIN (pipeline), source, sink, NULL);
+    fail_unless (gst_element_link (source, sink) == true, "Elements could not be linked.");
+
+    /* Modify the source's properties */
+    g_object_set (source, "pattern", 0, NULL);
+
+    /*
+     * Set pipeline to PLAYING
+     */
+    GST_FIXME( "Setting to Playing State\n");
+    fail_unless (gst_element_set_state (pipeline, GST_STATE_PLAYING) !=  GST_STATE_CHANGE_FAILURE);
+    GST_FIXME( "Set to Playing State\n");
+
+    WaitForOperation;
+
+    fail_unless (gst_element_query_position (pipeline, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
+    g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+    previous_position = (currentPosition/GST_SECOND);
+    previous_rendered_frames = rendered_frames;
+
+    bus = gst_element_get_bus (pipeline);
+    do
+    {
+        Sleep(1);
+        fail_unless (gst_element_query_position (pipeline, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
+	difference = int(abs((currentPosition/GST_SECOND) - (startPosition/GST_SECOND)));
+	printf("\nCurrent Position : %lld",(currentPosition/GST_SECOND));
+	play_jump = int(currentPosition/GST_SECOND) - previous_position;
+	printf("\nPlay jump = %d", play_jump);
+
+	if (play_jump != NORMAL_PLAYBACK_RATE)
+            jump_buffer -=1;
+
+	fail_unless(jump_buffer != 0 , "Playback is not happenning at the expected rate");
+	previous_position = (currentPosition/GST_SECOND);
+
+	g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+	fail_unless (rendered_frames > previous_rendered_frames, "Frames not rendered properly");
+	previous_rendered_frames = rendered_frames;
+
+    }while(difference <= play_timeout);
+
+    g_object_get (G_OBJECT (sink), "last-message", &fps_msg, NULL);
+    fail_unless( fps_msg!= NULL,"Unable to obtain last-message from fpsdisplaysink");
+    if (fps_msg != NULL)
+    {
+        g_print ("Frame info: %s\n", fps_msg);
+	char buffer[250],*temp;
+	sprintf(buffer, "%s", fps_msg);
+	temp = strstr(buffer, ": ") +2;
+        rendered = atoi(temp);
+
+        temp = strstr(temp, ": ") + 2;
+        dropped = atoi(temp);
+
+        temp = strstr(temp, ": ") + 2;
+        current = atof(temp);
+
+        temp = strstr(temp, ": ") + 2;
+        average = atof(temp);
+
+	fail_unless (rendered > 0,"Frames rendering didnot happen as expected");
+	fail_unless (dropped == 0,"Frames were droppped as part of playback");
+	fail_unless (average > 0, "Average frame rate was not as expected");
+	fail_unless (current > 0, "Current framerate was not as expected");
+    }
+
+    /*
+     * Write FrameRate info to video_info file
+     */
+    writeFPSdata(sink);
+
+    if (pipeline)
+    {
+       gst_element_set_state(pipeline, GST_STATE_NULL);
+    }
+
+    /*
+     * Cleanup after use
+     */
+    gst_object_unref (pipeline);
+}
+GST_END_TEST;
+
+
 /********************************************************************************************************************
  * Purpose      : Test to do audio change during playback using playbin element and westeros-sink
  * Parameters   : Audio Change during playback
@@ -939,6 +1196,7 @@ GST_START_TEST (test_audio_change)
     bool is_av_playing = false;
     GstElement *playbin;
     GstElement *westerosSink;
+    GstElement *fpssink;
     gint flags;
     MessageHandlerData data;
     GstTagList *tags;
@@ -971,9 +1229,25 @@ GST_START_TEST (test_audio_change)
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
 
     /*
-     * Link the westeros-sink to playbin
+     * Link video-sink with playbin
      */
-    g_object_set (playbin, "video-sink", westerosSink, NULL);
+    if (use_fpsdisplaysink)
+    {
+        /*
+         * Create and link fpsdisplaysink if configuration is enabled
+         */
+        fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
+        fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
+        g_object_set (playbin, "video-sink",fpssink, NULL);
+        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        g_object_set (fpssink, "signal-fps-measurements", true, NULL);
+        g_object_set (fpssink, "fps-update-interval", 1000, NULL);
+        g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
+    }
+    else
+    {
+        g_object_set (playbin, "video-sink", westerosSink, NULL);
+    }
 
     /*
      * Set the first frame recieved callback
@@ -1046,6 +1320,15 @@ GST_START_TEST (test_audio_change)
         fail_unless (is_av_playing == true, "Video is not playing in TV");
     }
     GST_LOG("DETAILS: SUCCESS, Video playing successfully for all audio streams\n");
+
+    /*
+     * Write FrameRate info to video_info file
+     */
+    if (use_fpsdisplaysink)
+    {
+        writeFPSdata(fpssink);
+    }
+
     if (playbin)
     {
        fail_unless (gst_element_set_state (playbin, GST_STATE_NULL) !=  GST_STATE_CHANGE_FAILURE);
@@ -1122,6 +1405,12 @@ media_pipeline_suite (void)
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
+    else if (strcmp ("test_frameDrop", tcname) == 0)
+    {
+       tcase_add_test (tc_chain, test_frameDrop);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
     return gstPluginsSuite;
 }
 
@@ -1165,6 +1454,7 @@ int main (int argc, char **argv)
             (strcmp ("test_generic_playback", tcname) == 0) ||
             (strcmp ("test_playback_latency", tcname) == 0) ||
             (strcmp ("test_audio_change", tcname) == 0) ||
+	    (strcmp ("test_frameDrop", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0))
 	{
             strcpy(m_play_url,argv[2]);
@@ -1179,6 +1469,14 @@ int main (int argc, char **argv)
                     strtok (argv[arg], "=");
       		    play_timeout = atoi (strtok (NULL, "="));
                 }
+		if (strcmp ("checkPTS=no", argv[arg]) == 0)
+                {
+                    checkPTS = false;
+                }
+		if (strcmp ("checkFPS=no", argv[arg]) == 0)
+	        {
+		    use_fpsdisplaysink = false;
+		}
             }
 
             printf ("\nArg : TestCase Name: %s \n", tcname);
@@ -1200,6 +1498,10 @@ int main (int argc, char **argv)
 		{
 		    checkPTS = false;
 		}
+		if (strcmp ("checkFPS=no", argv[arg]) == 0)
+                {
+                    use_fpsdisplaysink = false;
+                }
                 if (strstr (argv[arg], "timeout=") != NULL)
                 {
                     strtok (argv[arg], "=");

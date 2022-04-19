@@ -3264,7 +3264,83 @@ void DSHalAgent::DSHal_GetQuantizationRange(IN const Json::Value& req, OUT Json:
         return;
     }
 }
-
+/***************************************************************************
+ *Function name : DSHal_SetBassEnhancer
+ *Description    : This function is to set the Bass Enhancement value
+ *****************************************************************************/
+void DSHalAgent::DSHal_SetBassEnhancer(IN const Json::Value& req, OUT Json::Value& response)
+{
+    DEBUG_PRINT(DEBUG_TRACE, "DSHal_SetBassEnhancer--->Entry\n");
+    if(&req["boost"] == NULL)
+    {
+        return;
+    }
+    int boost = req["boost"].asInt();
+    dsError_t ret = dsERR_NONE;
+    ret = dsSetBassEnhancer(apHandle, boost);
+    if (ret == dsERR_NONE)
+    {
+        response["result"] = "SUCCESS";
+        response["details"] = "SetBassEnhancer success";
+        DEBUG_PRINT(DEBUG_LOG, "DSHal_SetBassEnhancer call is SUCCESS");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_SetBassEnhancer -->Exit\n");
+        return;
+    }
+    else if (ret == dsERR_INVALID_PARAM)
+    {
+        response["result"] = "FAILURE";
+        response["details"] = "INVALID PARAM";
+        DEBUG_PRINT(DEBUG_ERROR, "Invalid parameter");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_SetBassEnhancer -->Exit\n");
+        return;
+    }
+    else
+    {
+	checkERROR(ret,&error);
+        response["result"] = "FAILURE";
+        response["details"] = "SetBassEnhancer call failed"+error;
+        DEBUG_PRINT(DEBUG_ERROR, "DSHal_SetBassEnhancer call is FAILURE");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_SetBassEnhancer -->Exit\n");
+        return;
+    }
+}
+/***************************************************************************
+ *Function name : DSHal_GetBassEnhancer
+ *Description    : This function is to get the bass enhancement value
+ *****************************************************************************/
+void DSHalAgent::DSHal_GetBassEnhancer(IN const Json::Value& req, OUT Json::Value& response)
+{
+    DEBUG_PRINT(DEBUG_TRACE, "DSHal_GetBassEnhancer --->Entry\n");
+    dsError_t ret = dsERR_NONE;
+    int boost;
+    ret = dsGetBassEnhancer(apHandle, &boost);
+    if (ret == dsERR_NONE)
+    {
+        response["result"] = "SUCCESS";
+        response["details"] = boost;
+        DEBUG_PRINT(DEBUG_LOG, "DSHal_GetBassEnhancer call is SUCCESS");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_GetBassEnhancer -->Exit\n");
+        return;
+    }
+    else if (ret == dsERR_INVALID_PARAM)
+    {
+        response["result"] = "FAILURE";
+        response["details"] = "INVALID PARAM";
+        DEBUG_PRINT(DEBUG_ERROR, "Invalid parameter");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_GetBassEnhancer -->Exit\n");
+        return;
+    }
+    else
+    {
+	checkERROR(ret,&error);
+        response["result"] = "FAILURE";
+        response["details"] = "GetBassEnhancer call failed"+error;
+	DEBUG_PRINT(DEBUG_TRACE1, "Boost : %d",boost);
+        DEBUG_PRINT(DEBUG_ERROR, "DSHal_GetBassEnhancer call is FAILURE");
+        DEBUG_PRINT(DEBUG_TRACE, "DSHal_GetBassEnhancer -->Exit\n");
+        return;
+    }
+}
 /**************************************************************************
 Function Name   : cleanup
 

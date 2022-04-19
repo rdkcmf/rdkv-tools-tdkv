@@ -141,6 +141,8 @@ class DSHalAgent : public RDKTestStubInterface , public AbstractServer<DSHalAgen
                     this->bindAndAddMethod(Procedure("TestMgr_DSHal_SetVolumeLeveller", PARAMS_BY_NAME, JSON_STRING, "mode", JSON_INTEGER, "level", JSON_INTEGER, NULL), &DSHalAgent::DSHal_SetVolumeLeveller);
                     this->bindAndAddMethod(Procedure("TestMgr_DSHal_GetVolumeLeveller", PARAMS_BY_NAME, JSON_STRING,NULL), &DSHalAgent::DSHal_GetVolumeLeveller);
                     this->bindAndAddMethod(Procedure("TestMgr_DSHal_GetQuantizationRange", PARAMS_BY_NAME, JSON_STRING,NULL), &DSHalAgent::DSHal_GetQuantizationRange);
+		    this->bindAndAddMethod(Procedure("TestMgr_DSHal_SetBassEnhancer", PARAMS_BY_NAME, JSON_STRING, "boost", JSON_INTEGER,NULL), &DSHalAgent::DSHal_SetBassEnhancer);
+		    this->bindAndAddMethod(Procedure("TestMgr_DSHal_GetBassEnhancer", PARAMS_BY_NAME, JSON_STRING,NULL), &DSHalAgent::DSHal_GetBassEnhancer);
 
                 }
 
@@ -230,6 +232,8 @@ class DSHalAgent : public RDKTestStubInterface , public AbstractServer<DSHalAgen
                 void DSHal_GetSurroundVirtualizer(IN const Json::Value& req, OUT Json::Value& response);
                 void DSHal_SetVolumeLeveller(IN const Json::Value& req, OUT Json::Value& response);
                 void DSHal_GetVolumeLeveller(IN const Json::Value& req, OUT Json::Value& response);
-                void DSHal_GetQuantizationRange(IN const Json::Value& req, OUT Json::Value& response);             
+                void DSHal_GetQuantizationRange(IN const Json::Value& req, OUT Json::Value& response);
+                void DSHal_SetBassEnhancer(IN const Json::Value& req, OUT Json::Value& response);
+                void DSHal_GetBassEnhancer(IN const Json::Value& req, OUT Json::Value& response);		
 }; 
 #endif //__DSHAL_STUB_H__

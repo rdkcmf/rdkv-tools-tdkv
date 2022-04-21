@@ -719,6 +719,7 @@ void BluetoothHalAgent::BluetoothHal_GetListOfScannedDevices (IN const Json::Val
                    // Retrieve the device details from the device structure list to a json object 
                    jdevice ["deviceName"] = listOfScannedDevices.devices[deviceCount].pcDeviceName;
                    jdevice ["deviceID"] = listOfScannedDevices.devices[deviceCount].tDeviceId;
+		   jdevice ["deviceIndex"] = deviceCount;
 
 	           if (get_Address_and_Path)
                    {
@@ -727,7 +728,7 @@ void BluetoothHalAgent::BluetoothHal_GetListOfScannedDevices (IN const Json::Val
                    }
                }
                // Add the json object with device details to the json array
-               jdeviceList [deviceCount] = jdevice;
+               jdeviceList [0] = jdevice;
                DEBUG_PRINT (DEBUG_TRACE, "BluetoothHal_GetListOfScannedDevices : Device %d:\n\tDevice Name: %s\n\tDevice ID: %llu\n\tDevice Address: %s\n\tDevice Path: %s\n", deviceCount, listOfScannedDevices.devices[deviceCount].pcDeviceName, listOfScannedDevices.devices[deviceCount].tDeviceId, listOfScannedDevices.devices[deviceCount].pcDeviceAddress, listOfScannedDevices.devices[deviceCount].pcDevicePath);
            }
            response["details"] = jdeviceList;
@@ -1040,12 +1041,11 @@ void BluetoothHalAgent::BluetoothHal_FindDevice (IN const Json::Value& req, OUT 
    DEBUG_PRINT (DEBUG_TRACE, "BluetoothHal_FindDevice --->Entry\n");
 
    char deviceIDString [BT_ADAPTER_STR_LEN] = {'\0'};
-   unsigned long long int deviceID;
-   strcpy (deviceIDString, req["device_id"].asCString ());
-   deviceID = strtoull (deviceIDString, NULL, 10);
+   int deviceIndex;
+   deviceIndex = req["device_index"].asInt ();
 
-   DEBUG_PRINT (DEBUG_TRACE, "BluetoothHal_FindDevice : Executing BTRCore_FindDevice() with input (device ID - %llu)\n", deviceID); 
-   gBTRCoreRet = BTRCore_FindDevice (gBTRCoreHandle, deviceID);
+   DEBUG_PRINT (DEBUG_TRACE, "BluetoothHal_FindDevice : Executing BTRCore_FindDevice() with input (deviceIndex - %d)\n", deviceIndex);
+   gBTRCoreRet = BTRCore_FindDevice (gBTRCoreHandle, deviceIndex);
    if (enBTRCoreSuccess == gBTRCoreRet)
    {
        response["result"] = "SUCCESS";

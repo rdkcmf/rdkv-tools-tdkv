@@ -1090,6 +1090,7 @@ GST_START_TEST (test_frameDrop)
     gint previous_position = 0;
     gint difference;
     gint64 startPosition;
+    float drop_rate;
 
     /* Create the elements */
     source = gst_element_factory_make ("videotestsrc", "source");
@@ -1163,8 +1164,9 @@ GST_START_TEST (test_frameDrop)
         temp = strstr(temp, ": ") + 2;
         average = atof(temp);
 
-	fail_unless (rendered > 0,"Frames rendering didnot happen as expected");
-	fail_unless (dropped == 0,"Frames were droppped as part of playback");
+        fail_unless (rendered > 0,"Frames rendering didnot happen as expected");
+        drop_rate = ((float)(dropped/rendered))*100;
+	fail_unless (drop_rate < 1.0,"Frame drop rate is high");
 	fail_unless (average > 0, "Average frame rate was not as expected");
 	fail_unless (current > 0, "Current framerate was not as expected");
     }

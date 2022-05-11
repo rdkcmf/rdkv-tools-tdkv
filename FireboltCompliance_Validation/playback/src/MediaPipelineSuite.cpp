@@ -396,6 +396,12 @@ static void printTag (const GstTagList *tags, const gchar *tag, gpointer user_da
     g_value_unset (&value);
 }
 
+/*
+ * Based on GStreamer sample code, which is:
+ * Copyright (C) GStreamer developers
+ * Here licensed under the MIT license
+ */
+
 static void getStreamProperties (MessageHandlerData *data)
 {
     gint i;

@@ -404,6 +404,8 @@ static void checkTrickplay(MessageHandlerData *Param)
     GstMessage *message;
     GstBus *bus;
     MessageHandlerData data;
+    int Seek_time_threshold = 5;
+    int wait_time = 0;
     data.playbin = Param->playbin;
     bus = gst_element_get_bus (data.playbin);
     /*
@@ -411,6 +413,7 @@ static void checkTrickplay(MessageHandlerData *Param)
      */
     data.terminate = FALSE;
     data.seeked = FALSE;
+    data.setRateOperation = FALSE;
     if (Param->setRateOperation)
     {
         data.setRateOperation = TRUE;
@@ -421,22 +424,55 @@ static void checkTrickplay(MessageHandlerData *Param)
     data.currentPosition = GST_CLOCK_TIME_NONE;
     data.stateChanged = FALSE;
     data.eosDetected = FALSE;
+
+    GstStateChangeReturn state_change;
+    GstState cur_state;
     do
     {
-         message = gst_bus_timed_pop_filtered (bus, 2 * GST_SECOND,
+       /*
+        * Polling for the state change to reflect with 1s timeout
+        */
+       state_change = gst_element_get_state (data.playbin, &cur_state, NULL, GST_SECOND);
+    }while (state_change == GST_STATE_CHANGE_ASYNC);
+
+    if(!data.setRateOperation)
+    {
+         start = std::chrono::steady_clock::now();
+         while(!data.terminate && !data.seeked)
+         {
+               //Check if seek had already happened
+               fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &(data.currentPosition)),
+                                                     "Failed to query the current playback position");
+               //Added GST_SECOND buffer time between currentPosition and seekPosition
+               if (abs( data.currentPosition - data.seekPosition) <= (GST_SECOND))
+               {
+                   data.seeked = TRUE;
+                   time_elapsed = gst_clock_get_time ((data.playbin)->clock);
+               }
+
+	       if (std::chrono::steady_clock::now() - start > std::chrono::seconds(Seek_time_threshold))
+                   break;
+         }
+    }
+    else
+    {
+         do
+         {
+               message = gst_bus_timed_pop_filtered (bus, 2 * GST_SECOND,
                                    (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
                                    (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
                                    (GstMessageType) GST_MESSAGE_ASYNC_DONE ));
-         if (NULL != message)
-         {
-             handleMessage (&data, message);
-         }
-         else
-         {
-             printf ("All messages are clear. No more message after seek\n");
-             break;
-         }
-    } while (!data.terminate && !data.seeked);
+               if (NULL != message)
+               {
+                   handleMessage (&data, message);
+               }
+               else
+               {
+                   printf ("All messages are clear. No more message after seek\n");
+                   break;
+               }
+         } while (!data.terminate && !data.seeked);
+    }
 
     if(data.eosDetected == TRUE)
     {
@@ -529,7 +565,7 @@ static void trickplayOperation(MessageHandlerData *data)
 	timestamp = gst_clock_get_time ((data->playbin)->clock);
 	fail_unless (gst_element_seek (data->playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
                                    GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, data->seekPosition,
-                                   GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to seek");
+                                   GST_SEEK_TYPE_SET, GST_CLOCK_TIME_NONE), "Failed to seek");
     }
     else
     {
@@ -561,7 +597,7 @@ static void trickplayOperation(MessageHandlerData *data)
         else
         {
              fail_unless (gst_element_seek(data->playbin, data->setRate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, data->currentPosition,
-    	        GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to set playback rate");
+    	        GST_SEEK_TYPE_SET, GST_CLOCK_TIME_NONE), "Failed to set playback rate");
         }    
     }
 
@@ -573,8 +609,8 @@ static void trickplayOperation(MessageHandlerData *data)
 	//Convert time to seconds
         data->currentPosition /= GST_SECOND;
         data->seekPosition /= GST_SECOND;
-        printf("SEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
-        GST_LOG ("SEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
+        printf("\nSEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
+        GST_LOG ("\nSEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
     }
     else
     {

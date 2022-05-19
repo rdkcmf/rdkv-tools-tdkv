@@ -25,6 +25,8 @@ GSTREAMER_GOOD_BIN_PATH=$OPENSOURCETEST_PATH/gst-plugin-good
 GSTREAMER_GOOD_LOG_PATH=$OPENSOURCETEST_PATH/logs/gst-plugin-good
 GSTREAMER_BASE_BIN_PATH=$OPENSOURCETEST_PATH/gst-plugin-base
 GSTREAMER_BASE_LOG_PATH=$OPENSOURCETEST_PATH/logs/gst-plugin-base
+GSTREAMER_BAD_BIN_PATH=$OPENSOURCETEST_PATH/gst-plugin-bad
+GSTREAMER_BAD_LOG_PATH=$OPENSOURCETEST_PATH/logs/gst-plugin-bad
 EXECUTER_PATH=$OPENSOURCETEST_PATH
 FILES_TO_IGNORE=open,applications,collection,*.sh,*.log,*.txt,all,new,*.png,silly,open,*.pdf,resources,auth-test,dns,get,getbug,proxy-test,pull-api,range-test,simple-httpd,simple-proxy,lt-gstpipeline
 EXECUTER_PATH=$OPENSOURCETEST_PATH
@@ -40,7 +42,7 @@ usage() {
 
 echo "Usage: `basename $0` [-c Component name] [-h help]"
 echo " -c     Specify the name of the component."
-echo "Example:Enter gstreamer for gstreamer, gst_plugin_base for gstreamer-plugins-base or gst_plugin_good for gstreamer-plugins-good test suite execution"
+echo "Example:Enter gst_plugin_base for gstreamer-plugins-base or gst_plugin_good for gstreamer-plugins-good or gst_plugin_bad for gstreamer-plugins-bad test suite execution"
 }
 while getopts ":hp:o:c:" opt; do
     case $opt in
@@ -111,7 +113,7 @@ case $COMPONENT_NAME in
          LOG_PATH=$GSTREAMER_PLUGIN_CUSTOM_LOG_PATH
          ;;
        *)
-         echo "At this moment gstreamer,gstreamer base plugin and gstreamer good plugin tests can run "
+         echo "At this moment gstreamer bad plugin,gstreamer base plugin and gstreamer good plugin tests can run "
          exit
          ;;
 esac

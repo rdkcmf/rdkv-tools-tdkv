@@ -37,10 +37,15 @@ fi
 if [ "$2" == "MANUAL" ];then
    TEST_OPTION="MANUAL"
 fi
+
+#Stop wpeframework to get EGL Display
+systemctl stop wpeframework
+
 #Export westeros library
 export XDG_RUNTIME_DIR=/tmp
+export LD_PRELOAD=libwesteros_gl.so.0.0.0
+
 start_westeros_renderer(){
-  export LD_PRELOAD=libwesteros_gl.so.0.0.0
   timeout 30 westeros --renderer libwesteros_render_embedded.so.0.0.0 --display $DISPLAY --embedded --noFBO &
 }
 log(){
@@ -77,6 +82,7 @@ then
         printf "\nEssos_TDKTestApp didnot run properly\nExiting from Test\n"
         printf '#%.0s' {1..40}
         printf '\n'
+	systemctl start wpeframework
         exit
     fi
     resultvar=()
@@ -115,6 +121,7 @@ then
     printf '#%.0s' {1..100}
     printf '\n'
     pkill -f  Essos_TDKTestApp
+    systemctl start wpeframework
     exit
 fi
 if [ "$TEST_OPTION" == "USE_WAYLAND" ];
@@ -126,10 +133,13 @@ then
 fi
 if [ "$TEST" == "Essos" ];
 then
-    Essos_TDKTestApp -d -t=$TIMEOUT
+    ./Essos_TDKTestApp -d -t=$TIMEOUT
 elif [ "$TEST" == "Westeros" ];
 then
     start_westeros_renderer
     sleep 3
     Westeros_TDKTestApp --display $DISPLAY -t=$TIMEOUT
 fi
+
+#Start wpeframework
+systemctl start wpeframework

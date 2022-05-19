@@ -1170,7 +1170,7 @@ GST_START_TEST (test_frameDrop)
         temp = strstr(temp, ": ") + 2;
         average = atof(temp);
 
-        fail_unless (rendered > 0,"Frames rendering didnot happen as expected");
+        fail_unless (rendered > 0,"Frames rendering not happening as expected");
         drop_rate = ((float)(dropped/rendered))*100;
 	fail_unless (drop_rate < 1.0,"Frame drop rate is high");
 	fail_unless (average > 0, "Average frame rate was not as expected");
@@ -1465,8 +1465,17 @@ int main (int argc, char **argv)
 	    (strcmp ("test_frameDrop", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0))
 	{
-            strcpy(m_play_url,argv[2]);
-            for (arg = 3; arg < argc; arg++)
+	    if (strcmp ("test_frameDrop", tcname) == 0)
+	    {
+		arg = 2;
+	    }
+	    else
+	    {
+		strcpy(m_play_url,argv[2]);
+		arg = 3;
+	    }
+
+            for (; arg < argc; arg++)
             {
                 if (strcmp ("checkavstatus=yes", argv[arg]) == 0)
                 {

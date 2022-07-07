@@ -403,6 +403,8 @@ static void checkTrickplay(MessageHandlerData *Param)
 {
     GstMessage *message;
     GstBus *bus;
+    GstStateChangeReturn state_change;
+    GstState cur_state;
     MessageHandlerData data;
     int Seek_time_threshold = 5;
     int wait_time = 0;
@@ -425,18 +427,12 @@ static void checkTrickplay(MessageHandlerData *Param)
     data.stateChanged = FALSE;
     data.eosDetected = FALSE;
 
-    GstStateChangeReturn state_change;
-    GstState cur_state;
-    do
-    {
-       /*
-        * Polling for the state change to reflect with 1s timeout
-        */
-       state_change = gst_element_get_state (data.playbin, &cur_state, NULL, GST_SECOND);
-    }while (state_change == GST_STATE_CHANGE_ASYNC);
-
     if(!data.setRateOperation)
     {
+	 do
+	 {
+	       state_change = gst_element_get_state (data.playbin, &cur_state, NULL, GST_SECOND);
+         }while (state_change == GST_STATE_CHANGE_ASYNC);
          start = std::chrono::steady_clock::now();
          while(!data.terminate && !data.seeked)
          {
@@ -565,7 +561,7 @@ static void trickplayOperation(MessageHandlerData *data)
 	timestamp = gst_clock_get_time ((data->playbin)->clock);
 	fail_unless (gst_element_seek (data->playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
                                    GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, data->seekPosition,
-                                   GST_SEEK_TYPE_SET, GST_CLOCK_TIME_NONE), "Failed to seek");
+                                   GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to seek");
     }
     else
     {
@@ -681,6 +677,7 @@ static void SetupStream (MessageHandlerData *data)
      */
     westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+
     /*
      * Link the westeros-sink to playbin
      */

@@ -18,6 +18,7 @@
 */
 
 #include "SystemUtil_stub.h"
+#define RESULT_BUFFER_SIZE 500
 
 /***************************************************************************
  *Function name : testmodulepre_requisites
@@ -313,6 +314,7 @@ void SystemUtilAgent::SystemUtilAgent_ExecuteCmd(IN const Json::Value& req, OUT 
 	DEBUG_PRINT(DEBUG_TRACE, "SystemUtilAgent_ExecuteCmd -->Entry\n");
 
 	string fileinfo = req["command"].asCString();
+	string resultDetails;
 	
 	FILE *fp = NULL;
 	char readRespBuff[BUFF_LENGTH] = { '\0' };
@@ -339,15 +341,22 @@ void SystemUtilAgent::SystemUtilAgent_ExecuteCmd(IN const Json::Value& req, OUT 
 	while(fgets(readRespBuff,sizeof(readRespBuff),fp) != NULL)
 	{
 		DEBUG_PRINT(DEBUG_TRACE, "Command Response:\n");
+		resultDetails += readRespBuff;
 		cout<<readRespBuff<<endl;
 	}
 
 	pclose(fp);	
 
 	string respResult(readRespBuff);
+
+	if (resultDetails.size() > RESULT_BUFFER_SIZE)
+	{
+	    resultDetails = resultDetails.substr(resultDetails.size()- RESULT_BUFFER_SIZE);
+	}
+
 	DEBUG_PRINT(DEBUG_TRACE, "\n\nResponse: %s\n",respResult.c_str());
 	response["result"] = "SUCCESS";
-	response["details"] = respResult;
+	response["details"] = resultDetails;
 	DEBUG_PRINT(DEBUG_LOG, "Execution success\n");
 	DEBUG_PRINT(DEBUG_TRACE, "SystemUtilAgent_ExecuteCmd -->Exit\n");
 	return;

@@ -31,7 +31,7 @@ extern "C"
 #include <gst/gst.h>
 }
 using namespace std;
-#define EOS_TIMEOUT                     -1
+#define RATE_SET_TIMEOUT                5
 #define DEFAULT_TEST_SUITE_TIMEOUT      360
 #define VIDEO_STATUS                    "/CheckVideoStatus.sh"
 #define AUDIO_STATUS                    "/CheckAudioStatus.sh"
@@ -47,6 +47,7 @@ using namespace std;
                                         if (std::chrono::steady_clock::now() - start > std::chrono::seconds(Runforseconds)) \
                                              break; \
                                         }
+#define WaitForOperation                Sleep(5)
 
 char m_play_url[BUFFER_SIZE_LONG] = {'\0'};
 char TDK_PATH[BUFFER_SIZE_SHORT] = {'\0'};
@@ -65,6 +66,10 @@ GstClockTime timestamp, latency, time_elapsed;
 bool firstFrameReceived = false;
 bool checkPTS = true;
 gint64 currentposition;
+bool trickplay = false;
+bool pause_operation = false;
+gint64 startPosition;
+string audiosink;
 
 /*
  * Playbin flags
@@ -125,7 +130,6 @@ RunSeconds:               - The interval for which pipeline should be monitored
 ********************************************************************************************************************************************/
 static void PlaySeconds(GstElement* playbin,int RunSeconds)
 {
-   gint64 startPosition;
    gint64 currentPosition;
    gint difference;
    GstMessage *message;
@@ -139,8 +143,10 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    GstElement *videoSink;
    GstState cur_state;
    gint play_jump = 0;
+   gint play_jump_previous = 99;
    gint previous_position = 0;
-   gint jump_buffer = 3;
+   gint jump_buffer = 1;
+   gint jump_buffer_small_value = 3;
    GstStateChangeReturn state_change;
 
 
@@ -150,18 +156,9 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    data.terminate = FALSE;
    data.eosDetected = FALSE;
 
-   fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
    g_object_get (playbin,"video-sink",&videoSink,NULL);
 
-   do
-   {
-       /*
-        * Polling for the state change to reflect with 1s timeout
-        */
-       state_change = gst_element_get_state (playbin, &cur_state, NULL, GST_SECOND);
-   }while (state_change == GST_STATE_CHANGE_ASYNC);
-
-   fail_unless (state_change != GST_STATE_CHANGE_FAILURE, "Failed to get current playbin state");
+   gst_element_get_state (playbin, &cur_state, NULL, GST_SECOND);
 
    if (checkPTS)
    {	   
@@ -173,7 +170,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
    previous_position = (currentPosition/GST_SECOND);
 
-   if ((cur_state == GST_STATE_PAUSED)  && (state_change != GST_STATE_CHANGE_ASYNC))
+   if (pause_operation)
    {
         do
         {
@@ -205,6 +202,10 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
         return;	   
    }
 
+   if (trickplay)
+   {
+	jump_buffer = 3;
+   }
    current_rate = getRate (playbin);
    bus = gst_element_get_bus (playbin);
    do
@@ -216,9 +217,37 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	
 	play_jump = int(currentPosition/GST_SECOND) - previous_position;
 	printf("\nPlay jump = %d", play_jump);
-	
-	if (current_rate >0 && (play_jump < current_rate))
-            jump_buffer -=1;
+
+	if(!trickplay)
+	{
+           /*
+            * Ignore if first jump is 0
+            */
+            if ((play_jump != NORMAL_PLAYBACK_RATE) && !(((play_jump == 0) && (play_jump_previous == 99))))
+                jump_buffer -=1;
+
+           /*
+            * For small jumps until 2 , jump_buffer is 2
+            */
+            if (((play_jump == 0) || (play_jump == 2) || (play_jump == -1)) && (jump_buffer == 0))
+            {
+                jump_buffer_small_value -=1;
+                jump_buffer = jump_buffer_small_value;
+            }
+
+           /*
+            * if playbin reports jump=0 and then jump=2 , then video has played fine only
+            */
+            if (((play_jump == 2) && (play_jump_previous == 0)) && (jump_buffer == 0))
+            {
+                jump_buffer = 1;
+            }
+        }
+        else
+	{	
+            if (current_rate >0 && (play_jump < current_rate))
+                jump_buffer -=1;
+        }
 
         message = gst_bus_pop_filtered (bus, (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
                                              (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
@@ -229,11 +258,6 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
         if (NULL != message)
         {
             handleMessage (&data, message);
-        }
-        else
-        {
-            printf ("All messages are clear. No more message after seek\n");
-            break;
         }
 	if (checkPTS)
         {
@@ -249,6 +273,8 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             old_pts = pts;
         }
 	previous_position = (currentPosition/GST_SECOND);
+        play_jump_previous = play_jump;
+   
    }while((difference <= RunSeconds) && !data.terminate && !data.eosDetected);
 
    if(data.eosDetected)
@@ -429,10 +455,6 @@ static void checkTrickplay(MessageHandlerData *Param)
 
     if(!data.setRateOperation)
     {
-	 do
-	 {
-	       state_change = gst_element_get_state (data.playbin, &cur_state, NULL, GST_SECOND);
-         }while (state_change == GST_STATE_CHANGE_ASYNC);
          start = std::chrono::steady_clock::now();
          while(!data.terminate && !data.seeked)
          {
@@ -452,22 +474,19 @@ static void checkTrickplay(MessageHandlerData *Param)
     }
     else
     {
+	 start = std::chrono::steady_clock::now();
          do
          {
-               message = gst_bus_timed_pop_filtered (bus, 2 * GST_SECOND,
-                                   (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
+               message = gst_bus_pop_filtered (bus,(GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
                                    (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
                                    (GstMessageType) GST_MESSAGE_ASYNC_DONE ));
-               if (NULL != message)
+               if (message != NULL)
                {
-                   handleMessage (&data, message);
+		    handleMessage (&data, message);
                }
-               else
-               {
-                   printf ("All messages are clear. No more message after seek\n");
-                   break;
-               }
-         } while (!data.terminate && !data.seeked);
+               if (std::chrono::steady_clock::now() - start > std::chrono::seconds(RATE_SET_TIMEOUT))
+                    break;
+         }while(!data.terminate && !data.seeked);
     }
 
     if(data.eosDetected == TRUE)
@@ -565,6 +584,7 @@ static void trickplayOperation(MessageHandlerData *data)
     }
     else
     {
+	trickplay = true;
         GST_LOG ("Setting the playback rate to %f\n", data->setRate);
         /*
          * Playback rates can be positive or negative depending on whether we are fast forwarding or rewinding
@@ -601,10 +621,11 @@ static void trickplayOperation(MessageHandlerData *data)
 
     if(!(data->setRateOperation))
     {
-        fail_unless (TRUE == data->seeked, "Seek Unsuccessfull\n");
 	//Convert time to seconds
         data->currentPosition /= GST_SECOND;
         data->seekPosition /= GST_SECOND;
+	printf("\nCurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
+        fail_unless (TRUE == data->seeked, "Seek Unsuccessfull\n");
         printf("\nSEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
         GST_LOG ("\nSEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
     }
@@ -653,8 +674,9 @@ Purpose:               Setup stream
 *********************************************************************************************************************/
 static void SetupStream (MessageHandlerData *data)
 {
-    GstElement *playbin;
+    GstElement *playbin, *playsink;
     GstElement *westerosSink;
+    GstElement *audioSink;
     gint flags;
     /*
      * Create the playbin element
@@ -672,16 +694,29 @@ static void SetupStream (MessageHandlerData *data)
     g_object_get (playbin, "flags", &flags, NULL);
     flags |= GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
     g_object_set (playbin, "flags", flags, NULL);
+
+    /* Forward all events to all sinks */
+    playsink = gst_bin_get_by_name(GST_BIN(playbin), "playsink");
+    g_object_set(playsink, "send-event-mode", 0, NULL);
+
     /*
      * Set westros-sink
      */
     westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
     fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
 
+    if (!audiosink.empty())
+    {
+	 printf("\nAudioSink is provided as %s",audiosink.c_str());
+         audioSink = gst_element_factory_make(audiosink.c_str(), NULL);
+         fail_unless (audioSink != NULL, "Failed to create 'audiosink' element");
+	 g_object_set (playbin, "audio-sink", audioSink, NULL);
+    }
     /*
      * Link the westeros-sink to playbin
      */
     g_object_set (playbin, "video-sink", westerosSink, NULL);
+    g_object_set (playbin, "async-handling", true, NULL);
     /*
      * Set the first frame recieved callback
      */
@@ -814,6 +849,8 @@ GST_START_TEST (trickplayTest)
 	    GST_ERROR ("Invalid operation\n");
 	}	
         
+	pause_operation = false;
+
 	data.currentRate = getRate(data.playbin);
         fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &data.currentPosition), "Failed to query the current playback position");
 
@@ -832,9 +869,14 @@ GST_START_TEST (trickplayTest)
 	    data.setRateOperation = TRUE;
 	    data.setRate = rate;
             trickplayOperation(&data);
-	    /* Playing for 20 seconds with 4x speed is equal to playing until position is 4*20 = 80 seconds */
-	    operationTimeout *= abs(rate);
+	    if (!(rate < 0))
+	    {
+		/* Playing for 20 seconds with 4x speed is equal to playing until position is 4*20 = 80 seconds */
+                operationTimeout *= abs(rate);
+            }
 	    data.setRateOperation = FALSE;
+	    WaitForOperation;
+	    fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
 	    if (latency_check_test)
             {
                 latency = time_elapsed - timestamp;
@@ -846,10 +888,12 @@ GST_START_TEST (trickplayTest)
     
 	if (seekOperation)
 	{
+	    trickplay = false;
 	    data.setRateOperation = FALSE;
 	    data.seekSeconds = seekSeconds;
 	    trickplayOperation(&data);
 	    seekOperation = false;
+	    startPosition = seekSeconds * GST_SECOND;
 	    if (latency_check_test)
             {
                 latency = time_elapsed - timestamp;
@@ -859,6 +903,7 @@ GST_START_TEST (trickplayTest)
 
 	if ("play" == operationString)
         {
+	    trickplay = false;
 	    /*
              * If pipeline is already in playing state with normal playback rate (1.0),
 	     * just wait for operationTimeout seconds, instead os setting the pipeline to playing state again
@@ -879,6 +924,7 @@ GST_START_TEST (trickplayTest)
                  } while (state_change == GST_STATE_CHANGE_ASYNC);
 		 printf ("\n********Current state is: %s \n", gst_element_state_get_name(cur_state));
              }
+	     fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
              /*
 	      * Wait for the requested time
 	      */
@@ -886,9 +932,12 @@ GST_START_TEST (trickplayTest)
 	 } 
 	 else if ("pause" == operationString)
          {
+	     trickplay = false;
+	     pause_operation = true;
              /*
 	      * Set the playbin state to GST_STATE_PAUSED
 	      */	
+	     fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
 	     gst_element_set_state (data.playbin, GST_STATE_PAUSED);
 	     PlaySeconds(data.playbin,5);
              fail_unless_equals_int (gst_element_get_state (data.playbin, &cur_state, NULL, 0), GST_STATE_CHANGE_SUCCESS);
@@ -977,6 +1026,12 @@ int main (int argc, char **argv)
 	 {
 	    latency_check_test = true;
 	 }
+	 if (strstr (argv[arg], "audioSink=") != NULL)
+         {
+             strtok (argv[arg], "=");
+             audiosink = (strtok (NULL, "="));
+         }
+
     }
     gst_check_init (&argc, &argv);
 

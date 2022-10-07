@@ -41,10 +41,10 @@ using namespace std;
 #define BUFFER_SIZE_SHORT               264
 #define NORMAL_PLAYBACK_RATE            1.0
 #define FCS_MICROSECONDS                1000000
-#define Sleep(RunSeconds)               start = std::chrono::steady_clock::now(); \
+#define Sleep(RunSeconds)               start = std::chrono::high_resolution_clock::now(); \
                                         Runforseconds = RunSeconds; \
                                         while(1) { \
-                                        if (std::chrono::steady_clock::now() - start > std::chrono::seconds(Runforseconds)) \
+                                        if (std::chrono::high_resolution_clock::now() - start > std::chrono::seconds(Runforseconds)) \
                                              break; \
                                         }
 #define WaitForOperation                Sleep(5)
@@ -60,9 +60,10 @@ vector<string> operationsList;
 bool checkAVStatus = false;
 int play_timeout = 10;
 int Runforseconds;
-auto start = std::chrono::steady_clock::now();
+auto start = std::chrono::high_resolution_clock::now();
 bool latency_check_test = false;
-GstClockTime timestamp, latency, time_elapsed;
+auto timestamp = std::chrono::high_resolution_clock::now(), time_elapsed = std::chrono::high_resolution_clock::now();
+auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(time_elapsed - timestamp);
 bool firstFrameReceived = false;
 bool checkPTS = true;
 gint64 currentposition;
@@ -346,9 +347,9 @@ bool check_for_AV_status ()
 
 static void parselatency()
 {
-    printf("\nLatency = %" GST_TIME_FORMAT"\n",GST_TIME_ARGS(latency));
-    latency = GST_TIME_AS_MSECONDS(latency);
-    printf("\nLatency = %lld milliseconds\n", latency);
+    int latency_int;
+    printf("\nTime measured: %.3lld milliseconds.\n", latency.count());
+    latency_int = latency.count();
     /*
      * Writing to file
      */
@@ -359,7 +360,7 @@ static void parselatency()
     filePointer = fopen(latency_file, "w");
     if (filePointer != NULL)
     {
-        fprintf(filePointer,"Latency = %lld milliseconds\n", latency);
+        fprintf(filePointer,"Latency = %d milliseconds\n", latency_int);
     }
     else
     {
@@ -455,7 +456,7 @@ static void checkTrickplay(MessageHandlerData *Param)
 
     if(!data.setRateOperation)
     {
-         start = std::chrono::steady_clock::now();
+         start = std::chrono::high_resolution_clock::now();
          while(!data.terminate && !data.seeked)
          {
                //Check if seek had already happened
@@ -465,16 +466,16 @@ static void checkTrickplay(MessageHandlerData *Param)
                if (abs( data.currentPosition - data.seekPosition) <= (GST_SECOND))
                {
                    data.seeked = TRUE;
-                   time_elapsed = gst_clock_get_time ((data.playbin)->clock);
+                   time_elapsed = std::chrono::high_resolution_clock::now();
                }
 
-	       if (std::chrono::steady_clock::now() - start > std::chrono::seconds(Seek_time_threshold))
+	       if (std::chrono::high_resolution_clock::now() - start > std::chrono::seconds(Seek_time_threshold))
                    break;
          }
     }
     else
     {
-	 start = std::chrono::steady_clock::now();
+	 start = std::chrono::high_resolution_clock::now();
          do
          {
                message = gst_bus_pop_filtered (bus,(GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
@@ -484,7 +485,7 @@ static void checkTrickplay(MessageHandlerData *Param)
                {
 		    handleMessage (&data, message);
                }
-               if (std::chrono::steady_clock::now() - start > std::chrono::seconds(RATE_SET_TIMEOUT))
+               if (std::chrono::high_resolution_clock::now() - start > std::chrono::seconds(RATE_SET_TIMEOUT))
                     break;
          }while(!data.terminate && !data.seeked);
     }
@@ -536,7 +537,7 @@ static void handleMessage (MessageHandlerData *data, GstMessage *message)
 	       data->currentRate = getRate(data->playbin);	    
                if (data->setRate == data->currentRate)
                {
-                   time_elapsed = gst_clock_get_time ((data->playbin)->clock);
+                   time_elapsed = std::chrono::high_resolution_clock::now();
                    data->seeked = TRUE;
                }
             }
@@ -548,7 +549,7 @@ static void handleMessage (MessageHandlerData *data, GstMessage *message)
                if (abs( data->currentPosition - data->seekPosition) <= (GST_SECOND))
                {
                    data->seeked = TRUE;
-                   time_elapsed = gst_clock_get_time ((data->playbin)->clock);
+                   time_elapsed = std::chrono::high_resolution_clock::now();
                }
             }
             break;
@@ -577,7 +578,7 @@ static void trickplayOperation(MessageHandlerData *data)
     if(!(data->setRateOperation))
     {
 	data->seekPosition = GST_SECOND * (data->seekSeconds);
-	timestamp = gst_clock_get_time ((data->playbin)->clock);
+	timestamp = std::chrono::high_resolution_clock::now();
 	fail_unless (gst_element_seek (data->playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
                                    GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, data->seekPosition,
                                    GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to seek");
@@ -601,7 +602,7 @@ static void trickplayOperation(MessageHandlerData *data)
         /*
          * Rewind the pipeline if rate is a negative number
          */ 
-        timestamp = gst_clock_get_time ((data->playbin)->clock);
+        timestamp = std::chrono::high_resolution_clock::now();
         if (data->setRate < 0)
 	{
 	     fail_unless (gst_element_seek (data->playbin, data->setRate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
@@ -642,7 +643,7 @@ static void trickplayOperation(MessageHandlerData *data)
 		reached_start = true;
 
             int time_to_reach_start = (currentposition/GST_SECOND)/abs(data->currentRate);
-            start = std::chrono::steady_clock::now();
+            start = std::chrono::high_resolution_clock::now();
 
 	    printf("\nTime to reach start = %d",time_to_reach_start);
             while(!reached_start)
@@ -652,7 +653,7 @@ static void trickplayOperation(MessageHandlerData *data)
                {
                   reached_start = true;
                }
-               if (std::chrono::steady_clock::now() - start > std::chrono::seconds(time_to_reach_start))
+               if (std::chrono::high_resolution_clock::now() - start > std::chrono::seconds(time_to_reach_start))
                   break;
                fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &currentposition), "Failed to query the current playback position");
 	    }
@@ -709,8 +710,14 @@ static void SetupStream (MessageHandlerData *data)
     {
 	 printf("\nAudioSink is provided as %s",audiosink.c_str());
          audioSink = gst_element_factory_make(audiosink.c_str(), NULL);
-         fail_unless (audioSink != NULL, "Failed to create 'audiosink' element");
-	 g_object_set (playbin, "audio-sink", audioSink, NULL);
+	 if (audioSink == NULL)
+	 {
+	     printf("\nUnable to create %s element\nPlaybin will take autoaudiosink\n",audiosink.c_str());
+	 }
+	 else
+	 {
+	     g_object_set (playbin, "audio-sink", audioSink, NULL);
+	 }
     }
     /*
      * Link the westeros-sink to playbin
@@ -879,7 +886,7 @@ GST_START_TEST (trickplayTest)
 	    fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
 	    if (latency_check_test)
             {
-                latency = time_elapsed - timestamp;
+                latency = std::chrono::duration_cast<std::chrono::milliseconds>(time_elapsed - timestamp);
                 parselatency();
             }
 
@@ -896,7 +903,7 @@ GST_START_TEST (trickplayTest)
 	    startPosition = seekSeconds * GST_SECOND;
 	    if (latency_check_test)
             {
-                latency = time_elapsed - timestamp;
+                latency = std::chrono::duration_cast<std::chrono::milliseconds>(time_elapsed - timestamp);
                 parselatency();
             }
 	}

@@ -24,6 +24,8 @@
 #include <cmath>
 #include <sstream>
 #include <chrono>
+#include <bits/stdc++.h>
+#include <sys/wait.h>
 extern "C"
 {
 #include <gst/check/gstcheck.h>
@@ -37,8 +39,10 @@ using namespace std;
 #define DEFAULT_TEST_SUITE_TIMEOUT	360
 #define VIDEO_STATUS 			"/CheckVideoStatus.sh"
 #define AUDIO_STATUS 			"/CheckAudioStatus.sh"
+#define FRAME_DATA                      "/CheckVideoStatus.sh getFrameData "
 #define PLAYBIN_ELEMENT 		"playbin"
 #define WESTEROS_SINK 			"westerossink"
+#define MIN_FRAMES_DROP                 3
 #define BUFFER_SIZE_LONG		1024
 #define BUFFER_SIZE_SHORT		264
 #define NORMAL_PLAYBACK_RATE		1.0
@@ -69,11 +73,14 @@ bool checkSignalTest = true;
 int play_timeout = 10;
 int videoEnd = 0;
 int videoStart =  0;
+int fps = 0;
+int totalFrames = 0;
 int Runforseconds;
 auto start = std::chrono::steady_clock::now();
 bool latency_check_test = false;
 bool firstFrameReceived = false;
 bool videoUnderflowReceived = false;
+bool checkTotalFrames = false;
 bool use_fpsdisplaysink = true;
 int SecondChannelTimeout =0;
 bool ChannelChangeTest = false;
@@ -86,6 +93,11 @@ bool justPrintPTS = false;
 bool seekOperation = false;
 gint seekSeconds = 0;
 bool play_without_video = false;
+bool ResolutionTest = false;
+string resolution;
+bool with_pause = false;
+bool useProcForFPS = false;
+bool NoWesterosFor_fpsdisplaysink = false;
 
 /*
  * Playbin flags
@@ -317,6 +329,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             printf("\nVideo Underflow received breaking from PlaySeconds");
             printf("\nExiting from PlaySeconds, currentPosition is %lld\n",currentPosition/GST_SECOND);
             gst_object_unref (bus);
+	    Sleep(3);
             return;
         }
 
@@ -382,6 +395,7 @@ static void writeFPSdata (GstElement *fpsdisplaysink)
    gchar *fps_msg;
    char video_info[BUFFER_SIZE_SHORT] = {'\0'};
    strcat (video_info, TDK_PATH);
+   gint rendered_frames;
    strcat (video_info, "/video_info");
    filePointer = fopen(video_info, "w");
    if (filePointer != NULL)
@@ -389,9 +403,11 @@ static void writeFPSdata (GstElement *fpsdisplaysink)
        g_object_get (G_OBJECT (fpsdisplaysink), "last-message", &fps_msg, NULL);
        if (fps_msg != NULL)
        {
-           g_print ("Frame info: %s\n", fps_msg);
 	   fprintf(filePointer,"%s\n", fps_msg);
        }
+       g_object_get (G_OBJECT (fpsdisplaysink), "frames-rendered", &rendered_frames, NULL);
+       g_print ("Rendered Frames: %d\n",rendered_frames);
+       fprintf(filePointer,"Rendered Frames: %d\n",rendered_frames);
    }
    fclose(filePointer);
 }
@@ -519,6 +535,38 @@ bool check_for_AV_status ()
 }
 
 /********************************************************************************************************************
+Purpose:               To read the number of frames rendered from file in DUT
+                       File is populated by FRAME_DATA(proc entry file)
+Return:               - int number fo frames rendered
+*********************************************************************************************************************/
+int readFramesFromFile()
+{
+    int rendered_frames;	
+    char rendered_frames_file[BUFFER_SIZE_SHORT] = {'\0'};
+    char buffer[BUFFER_SIZE_SHORT]={'\0'};
+    char result[BUFFER_SIZE_SHORT]={'\0'};
+    strcat (rendered_frames_file, "cat ");
+    strcat (rendered_frames_file, TDK_PATH);
+    strcat (rendered_frames_file, "/rendered_frames");
+    FILE* pipe = popen(rendered_frames_file, "r");
+    if (!pipe)
+    {
+        printf("Error in opening pipe \n");
+    }
+    while (!feof(pipe))
+    {
+       if (fgets(buffer, BUFFER_SIZE_SHORT, pipe) != NULL)
+       {
+            strcat(result, buffer);
+       }
+    }
+    pclose(pipe);
+    printf("\nFrames Rendered = %s\n",result);
+    rendered_frames = atoi(result);
+    return rendered_frames;
+}
+
+/********************************************************************************************************************
 Purpose:               Callback function to set a variable to true on receiving first frame
 *********************************************************************************************************************/
 static void firstFrameCallback(GstElement *sink, guint size, void *context, gpointer data)
@@ -544,8 +592,11 @@ Purpose:               Callback function to set a variable to true on receiving 
 static void bufferUnderflowCallback(GstElement *sink, guint size, void *context, gpointer data)
 {
    bool *gotVideoUnderflow = (bool*)data;
+   gint queued_frames;
 
    printf ("\nINFO : Received buffer underflow signal from westerossink\n");
+   g_object_get (sink,"queued-frames",&queued_frames,NULL);
+   printf("\nQueued Frames when underflow is received = %d",queued_frames);
    /*
     * Set the Value to global variable once the first frame signal is received
     */
@@ -686,6 +737,7 @@ GST_START_TEST (test_generic_playback)
     GstMessage *message;
     GstBus *bus;
     MessageHandlerData data;
+    int height,width;
 
     /*
      * Create the playbin element
@@ -756,13 +808,49 @@ GST_START_TEST (test_generic_playback)
     /*
      * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
      */
-    PlaySeconds(playbin,play_timeout);
+
+    if (useProcForFPS)
+    {
+         char frame_status[BUFFER_SIZE_SHORT] = {'\0'};
+         strcat (frame_status, TDK_PATH);
+         strcat (frame_status, FRAME_DATA);
+         strcat (frame_status, " &");
+	 system(frame_status);
+    }
+
+    data.playbin = playbin;
+    g_object_get (westerosSink, "video-height", &height, NULL);
+    g_object_get (westerosSink, "video-width", &width, NULL);
+    printf("\nVideo height = %d\nVideo width = %d", height, width);
+
+    if (ResolutionTest)
+    {
+	 if (!resolution.empty())
+	 {
+	     printf("\nChecking if video is playing at %s",resolution.c_str());
+	     resolution.pop_back();
+	     fail_unless(to_string(height) == resolution,"\nPipeline is not playing at expected resolution\nObtained video-height as %d and video-width as %d",height,width);
+             PlaySeconds(playbin,play_timeout);
+	     printf("\nSUCCESS : Resolution is set to %sp successfully\n",resolution.c_str());
+	 }
+    }
+    else
+    {
+	 PlaySeconds(playbin,play_timeout);
+    }
+
     /*
      * Write FrameRate info to video_info file
      */
     if (use_fpsdisplaysink)
     {
         writeFPSdata(fpssink);
+    }
+    if (useProcForFPS)
+    {
+	int rendered_frames;
+	rendered_frames = readFramesFromFile();
+        printf("\nRendered Frames %d\n",rendered_frames);
     }
     /*
      * Calculate latency by obtaining the sink base time
@@ -983,7 +1071,7 @@ GST_START_TEST (test_play_pause_pipeline)
     timestamp = gst_clock_get_time (playbin->clock);
     do
     {
-	message = gst_bus_pop (bus);
+	message = gst_bus_pop_filtered (bus,(GstMessageType)GST_MESSAGE_STATE_CHANGED);
         if (message != NULL)
         {
             if (GST_MESSAGE_STATE_CHANGED == GST_MESSAGE_TYPE(message))
@@ -1349,7 +1437,7 @@ GST_START_TEST (test_EOS)
     start = std::chrono::steady_clock::now();
     do
     {
-	message = gst_bus_pop (bus);
+	message = gst_bus_pop_filtered (bus,(GstMessageType)GST_MESSAGE_EOS);
         if (message != NULL)
         {
             if (GST_MESSAGE_EOS == GST_MESSAGE_TYPE(message))
@@ -1385,36 +1473,50 @@ GST_END_TEST;
 
 GST_START_TEST (test_frameDrop)
 {
-    GstElement *pipeline, *source, *sink;
+    GstElement *pipeline, *sink, *westerossink;
     gchar *fps_msg;
-    GstBus *bus;
     gint jump_buffer = 3;
     gint play_jump = 0;
-    int rendered,dropped;
-    double current,average;
-    int previous_rendered_frames, rendered_frames;
+    int previous_rendered_frames, rendered_frames, dropped_frames, expected_rendered_frames;
     gint64 currentPosition;
     gint previous_position = 0;
-    gint difference;
     gint64 startPosition;
-    float drop_rate;
+    gint difference;
+    GstBus *bus;
+    GstMessage *message;
+    bool runLoop = false;
+
+    if (!checkTotalFrames)
+    {
+        fail_unless (fps > 0,"\nfps value not given in command line argument");
+    }
+    else
+    {
+	fail_unless (totalFrames  > 0,"\ntotalFrames  not given in command line argument");
+    }
 
     /* Create the elements */
-    source = gst_element_factory_make ("videotestsrc", "source");
-    fail_unless (source != NULL, "Failed to create 'videotestsrc' element");
-    sink = gst_element_factory_make ("fpsdisplaysink", "sink");
-    fail_unless (sink  != NULL, "Failed to create 'fpsdisplaysink'  element");
+    pipeline = gst_element_factory_make ("playbin", "source");
+    fail_unless (pipeline != NULL, "Failed to create 'pipeline' element");
+    if (useProcForFPS)
+    {
+	sink = gst_element_factory_make (WESTEROS_SINK,"sink");
+    }
+    else
+    {
+        sink = gst_element_factory_make ("fpsdisplaysink", "sink");
+        fail_unless (sink  != NULL, "Failed to create 'fpsdisplaysink'  element");
+	g_object_set (sink, "signal-fps-measurements", false, NULL);
+	if (!NoWesterosFor_fpsdisplaysink)
+        {		
+            westerossink = gst_element_factory_make (WESTEROS_SINK,"westerossink");
+            fail_unless (westerossink != NULL, "Failed to create 'westerossink'  element");
+	    g_object_set (sink, "video-sink",westerossink, NULL);
+	}
+    }
 
-    /* Create the empty pipeline */
-    pipeline = gst_pipeline_new ("test-pipeline");
-    fail_unless (pipeline != NULL, "Failed to create 'pipeline'");
-
-    /* Build the pipeline */
-    gst_bin_add_many (GST_BIN (pipeline), source, sink, NULL);
-    fail_unless (gst_element_link (source, sink) == true, "Elements could not be linked.");
-
-    /* Modify the source's properties */
-    g_object_set (source, "pattern", 0, NULL);
+    g_object_set (pipeline, "video-sink",sink, NULL);
+    g_object_set (pipeline, "uri", m_play_url, NULL);
 
     /*
      * Set pipeline to PLAYING
@@ -1426,14 +1528,29 @@ GST_START_TEST (test_frameDrop)
     WaitForOperation;
 
     fail_unless (gst_element_query_position (pipeline, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
-    g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+    if (!useProcForFPS)
+    {
+         g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+	 previous_rendered_frames = rendered_frames;
+    }
     previous_position = (currentPosition/GST_SECOND);
-    previous_rendered_frames = rendered_frames;
+
+    if (useProcForFPS)
+    {
+	 char frame_status[BUFFER_SIZE_SHORT] = {'\0'};
+         strcat (frame_status, "sh ");
+         strcat (frame_status, TDK_PATH);
+         strcat (frame_status, FRAME_DATA);
+	 strcat (frame_status, " &");
+	 system(frame_status);
+    }
 
     bus = gst_element_get_bus (pipeline);
+
     do
     {
         Sleep(1);
+	runLoop = false;
         fail_unless (gst_element_query_position (pipeline, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
 	difference = int(abs((currentPosition/GST_SECOND) - (startPosition/GST_SECOND)));
 	printf("\nCurrent Position : %lld",(currentPosition/GST_SECOND));
@@ -1443,45 +1560,106 @@ GST_START_TEST (test_frameDrop)
 	if (play_jump != NORMAL_PLAYBACK_RATE)
             jump_buffer -=1;
 
-	fail_unless(jump_buffer != 0 , "Playback is not happenning at the expected rate");
-	previous_position = (currentPosition/GST_SECOND);
+	if (!useProcForFPS)
+	{
+	    g_object_get (sink,"frames-dropped",&dropped_frames,NULL);
+            g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+            printf("\nRendered frames %d\n", rendered_frames);
+	    if (!checkTotalFrames)
+		fail_unless (rendered_frames > previous_rendered_frames, "Frames not rendered properly");
+        }
 
-	g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
-	fail_unless (rendered_frames > previous_rendered_frames, "Frames not rendered properly");
 	previous_rendered_frames = rendered_frames;
 
-    }while(difference <= play_timeout);
+	if ((checkTotalFrames) && (rendered_frames == totalFrames))
+            break;
 
-    g_object_get (G_OBJECT (sink), "last-message", &fps_msg, NULL);
-    fail_unless( fps_msg!= NULL,"Unable to obtain last-message from fpsdisplaysink");
-    if (fps_msg != NULL)
+        if (!checkTotalFrames)
+	    fail_unless(jump_buffer != 0 , "Playback is not happening at the expected rate");
+
+	message = gst_bus_pop_filtered (bus,(GstMessageType)GST_MESSAGE_EOS);
+	if (message != NULL)
+        {
+            if (GST_MESSAGE_EOS == GST_MESSAGE_TYPE(message))
+	    {
+                printf("\nEOS Received:Exiting\n");
+	        break;
+	    }
+        }
+
+	if (!checkTotalFrames)
+	{
+	    if ((currentPosition/GST_SECOND) < play_timeout)
+	        runLoop = true;
+	    else
+		runLoop = false;
+	}
+	else
+	{
+	    if (useProcForFPS)
+		rendered_frames = readFramesFromFile();
+
+	    if(rendered_frames < previous_rendered_frames)
+	        jump_buffer -=1;
+
+	    if(jump_buffer == 0)
+                runLoop = false;
+            else
+                runLoop = true;
+	}
+
+	previous_position = (currentPosition/GST_SECOND);
+
+    }while(runLoop);
+
+    fail_unless (gst_element_set_state (pipeline, GST_STATE_PAUSED) !=  GST_STATE_CHANGE_FAILURE);
+    Sleep(1);
+
+    if (checkTotalFrames)
     {
-        g_print ("Frame info: %s\n", fps_msg);
-	char buffer[250],*temp;
-	sprintf(buffer, "%s", fps_msg);
-	temp = strstr(buffer, ": ") +2;
-        rendered = atoi(temp);
-
-        temp = strstr(temp, ": ") + 2;
-        dropped = atoi(temp);
-
-        temp = strstr(temp, ": ") + 2;
-        current = atof(temp);
-
-        temp = strstr(temp, ": ") + 2;
-        average = atof(temp);
-
-        fail_unless (rendered > 0,"Frames rendering not happening as expected");
-        drop_rate = ((float)(dropped/rendered))*100;
-	fail_unless (drop_rate < 1.0,"Frame drop rate is high");
-	fail_unless (average > 0, "Average frame rate was not as expected");
-	fail_unless (current > 0, "Current framerate was not as expected");
+	expected_rendered_frames = totalFrames;
+    }
+    else
+    {
+        expected_rendered_frames = fps * play_timeout;
     }
 
-    /*
-     * Write FrameRate info to video_info file
-     */
-    writeFPSdata(sink);
+    printf("\nExpected rendered frames : %d",expected_rendered_frames);
+
+    if (!useProcForFPS)
+    {
+         g_object_get (sink,"frames-rendered", &rendered_frames, NULL);
+         printf("\nFrames Rendered = %d\n", rendered_frames);
+	 if (checkTotalFrames)
+	 {
+	     dropped_frames = expected_rendered_frames - rendered_frames;
+	     if (dropped_frames)
+	         printf("\nFrames not rendered properly is %d",dropped_frames);
+	     fail_unless( dropped_frames < MIN_FRAMES_DROP,"\nExpected number of frames not rendered\n");
+	 }
+	 else
+         {
+             fail_unless( rendered_frames >= expected_rendered_frames,"\nExpected number of frames not rendered\n");
+	 }
+
+        /*
+         * Write FrameRate info to video_info file
+         */
+         writeFPSdata(sink);
+    }
+    else
+    {
+	 rendered_frames = readFramesFromFile();
+	 if (checkTotalFrames)
+         {
+             fail_unless( rendered_frames == expected_rendered_frames,"\nExpected number of frames not rendered\n");
+         }
+         else
+         {
+             fail_unless( rendered_frames >= expected_rendered_frames,"\nExpected number of frames not rendered\n");
+         }
+
+    }
 
     if (pipeline)
     {
@@ -1492,6 +1670,7 @@ GST_START_TEST (test_frameDrop)
      * Cleanup after use
      */
     gst_object_unref (pipeline);
+    gst_object_unref (bus);
 }
 GST_END_TEST;
 
@@ -1593,11 +1772,6 @@ GST_START_TEST (test_audio_change)
         gst_tag_list_free (tags);
     }
 
-    /*
-     * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
-     */
-    PlaySeconds(playbin,play_timeout);
-
     for( int index=0,counter=0; counter <= data.n_audio; index++,counter++)
     {
 	 /*
@@ -1609,6 +1783,13 @@ GST_START_TEST (test_audio_change)
          }
          if( index != data.current_audio)
          {
+	     if (with_pause)
+	     {
+		 printf("\nPausing pipeline before switching audio");
+                 gst_element_set_state (data.playbin, GST_STATE_PAUSED);
+		 WaitForOperation;
+		 PlaySeconds(playbin,2);
+	     }
              printf("\nSwitching to audio stream %d\n", index);
              printf("\nSetting current-audio to %d\n",index);
              g_object_set (data.playbin, "current-audio", index, NULL);
@@ -1622,7 +1803,12 @@ GST_START_TEST (test_audio_change)
                  gst_tag_list_foreach (tags, printTag, GINT_TO_POINTER (1));
                  gst_tag_list_free (tags);
              }
-	     PlaySeconds(playbin,5);
+	     if (with_pause)
+             {
+                 printf("\nSet pipeline to playing state");
+                 gst_element_set_state (data.playbin, GST_STATE_PLAYING);
+                 WaitForOperation;
+             }
              printf("\nSUCCESS : Switched to audio stream %d, Playing for %d seconds\n",index,play_timeout);
 	     PlaySeconds(playbin,play_timeout);
          }
@@ -1721,7 +1907,21 @@ media_pipeline_suite (void)
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
+    else if (strcmp ("test_audio_change_with_pause", tcname) == 0)
+    {
+       with_pause = true;
+       tcase_add_test (tc_chain, test_audio_change);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
     else if (strcmp ("test_frameDrop", tcname) == 0)
+    {
+       checkTotalFrames = true;
+       tcase_add_test (tc_chain, test_frameDrop);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_playback_fps", tcname) == 0)
     {
        tcase_add_test (tc_chain, test_frameDrop);
        GST_INFO ("tc %s run successfull\n", tcname);
@@ -1739,6 +1939,13 @@ media_pipeline_suite (void)
        bufferUnderflowTest = true;
        checkSignalTest = false;
        tcase_add_test (tc_chain, test_buffer_underflow);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_resolution", tcname) == 0)
+    {
+       ResolutionTest = true;
+       tcase_add_test (tc_chain, test_generic_playback);
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
@@ -1775,6 +1982,10 @@ int main (int argc, char **argv)
 	returnValue = 0;
 	goto exit;
     }
+    if (getenv ("FPSDISPLAYSINK_USE_AUTOVIDEO") != NULL)
+    {
+	NoWesterosFor_fpsdisplaysink = true;
+    }
     if (argc == 2)
     {
     	strcpy (tcname, argv[1]);
@@ -1790,20 +2001,16 @@ int main (int argc, char **argv)
             (strcmp ("test_generic_playback", tcname) == 0) ||
             (strcmp ("test_playback_latency", tcname) == 0) ||
             (strcmp ("test_audio_change", tcname) == 0) ||
+            (strcmp ("test_audio_change_with_pause", tcname) == 0) ||
 	    (strcmp ("test_frameDrop", tcname) == 0) ||
 	    (strcmp ("test_buffer_underflow_signal", tcname) == 0) ||
 	    (strcmp ("test_buffer_underflow_playback", tcname) == 0) ||
+	    (strcmp ("test_resolution", tcname) == 0) ||
+	    (strcmp ("test_playback_fps", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0))
 	{
-	    if (strcmp ("test_frameDrop", tcname) == 0)
-	    {
-		arg = 2;
-	    }
-	    else
-	    {
-		strcpy(m_play_url,argv[2]);
-		arg = 3;
-	    }
+	    strcpy(m_play_url,argv[2]);
+            arg = 3;
 
             for (; arg < argc; arg++)
             {
@@ -1838,6 +2045,26 @@ int main (int argc, char **argv)
 		{
 		    play_without_video = true;
 		}
+		if (strcmp ("useProcForFPS", argv[arg]) == 0)
+		{
+		    useProcForFPS = true;
+		    use_fpsdisplaysink = false;
+                }
+		if (strstr (argv[arg], "checkResolution=") != NULL)
+                {
+                    strtok (argv[arg], "=");
+                    resolution = (strtok (NULL, "="));
+                }
+		if (strstr (argv[arg], "fps=") != NULL)
+                {
+                    strtok (argv[arg], "=");
+                    fps = atoi (strtok (NULL, "="));
+                }
+		if (strstr (argv[arg], "totalFrames=") != NULL)
+                {
+                    strtok (argv[arg], "=");
+                    totalFrames = atoi (strtok (NULL, "="));
+                }
             }
 
             printf ("\nArg : TestCase Name: %s \n", tcname);

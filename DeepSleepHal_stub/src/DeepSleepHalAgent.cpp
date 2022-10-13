@@ -105,7 +105,6 @@ void DeepSleepHalAgent::DeepSleepHal_SetDeepSleep(IN const Json::Value& req, OUT
 {
     DEBUG_PRINT(DEBUG_TRACE, "DeepSleepHal_SetDeepSleep --->Entry\n");
     char details[100];
-    bool networkstandby = false;
     if(&req["timeout"] == NULL)
     {
         response["result"] = "FAILURE";
@@ -113,17 +112,18 @@ void DeepSleepHalAgent::DeepSleepHal_SetDeepSleep(IN const Json::Value& req, OUT
         return;
     }
 #ifdef ENABLE_DEEP_SLEEP
-
+#ifdef ENABLE_DEEPSLEEP_WAKEUP_EVT
     bool isGPIOWakeup = 0;
-
+#endif //ENABLE_DEEPSLEEP_WAKEUP_EVT
     uint32_t deep_sleep_timeout = (uint32_t)req["timeout"].asInt();
     DEBUG_PRINT(DEBUG_TRACE, "SetDeepSleep for %u seconds\n",(unsigned int)deep_sleep_timeout);
 
     start = std::chrono::high_resolution_clock::now();
-
-    int ret = PLAT_DS_SetDeepSleep(deep_sleep_timeout, &isGPIOWakeup, networkstandby);
-
-
+#ifdef ENABLE_DEEPSLEEP_WAKEUP_EVT
+    int ret = PLAT_DS_SetDeepSleep(deep_sleep_timeout, &isGPIOWakeup);
+#else
+    int ret = PLAT_DS_SetDeepSleep(deep_sleep_timeout);
+#endif //ENABLE_DEEPSLEEP_WAKEUP_EVT
     stop = std::chrono::high_resolution_clock::now();
 
     int freezeDuration = std::chrono::duration_cast<std::chrono::seconds>(stop - start).count();

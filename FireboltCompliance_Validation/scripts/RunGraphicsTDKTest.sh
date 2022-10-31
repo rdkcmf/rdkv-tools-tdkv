@@ -130,6 +130,8 @@ then
     sleep 3
     export LD_PRELOAD=libwayland-egl.so.0.0.0
     export WAYLAND_DISPLAY=$DISPLAY
+else
+    unset WAYLAND_DISPLAY
 fi
 if [ "$TEST" == "Essos" ];
 then

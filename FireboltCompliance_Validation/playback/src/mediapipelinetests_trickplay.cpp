@@ -69,6 +69,7 @@ bool checkPTS = true;
 gint64 currentposition;
 bool trickplay = false;
 bool pause_operation = false;
+bool forward_events = true;
 gint64 startPosition;
 string audiosink;
 
@@ -638,6 +639,7 @@ static void trickplayOperation(MessageHandlerData *data)
         {
 	    printf("\nIn negative rate handling");
 	    bool reached_start = false;
+	    gint64 previous_position;
 
 	    if (currentposition/GST_SECOND == 0)
 		reached_start = true;
@@ -648,7 +650,7 @@ static void trickplayOperation(MessageHandlerData *data)
 	    printf("\nTime to reach start = %d",time_to_reach_start);
             while(!reached_start)
             {
-	       Sleep(1);
+	       previous_position = currentposition;
                if ((currentposition/GST_SECOND) == 0)
                {
                   reached_start = true;
@@ -656,6 +658,8 @@ static void trickplayOperation(MessageHandlerData *data)
                if (std::chrono::high_resolution_clock::now() - start > std::chrono::seconds(time_to_reach_start))
                   break;
                fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &currentposition), "Failed to query the current playback position");
+	       if (previous_position != currentposition)
+		  printf("\nCurrentPosition %lld seconds",(currentposition/GST_SECOND));
 	    }
 
 	    if (reached_start)
@@ -696,9 +700,12 @@ static void SetupStream (MessageHandlerData *data)
     flags |= GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
     g_object_set (playbin, "flags", flags, NULL);
 
-    /* Forward all events to all sinks */
-    playsink = gst_bin_get_by_name(GST_BIN(playbin), "playsink");
-    g_object_set(playsink, "send-event-mode", 0, NULL);
+    if (forward_events)
+    {
+         /* Forward all events to all sinks */
+         playsink = gst_bin_get_by_name(GST_BIN(playbin), "playsink");
+         g_object_set(playsink, "send-event-mode", 0, NULL);
+    }
 
     /*
      * Set westros-sink
@@ -1038,7 +1045,10 @@ int main (int argc, char **argv)
              strtok (argv[arg], "=");
              audiosink = (strtok (NULL, "="));
          }
-
+	 if (strcmp ("forwardEvents=no", argv[arg]) == 0)
+         {
+            forward_events = false;
+         }
     }
     gst_check_init (&argc, &argv);
 

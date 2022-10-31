@@ -43,6 +43,7 @@ using namespace std;
 #define PLAYBIN_ELEMENT 		"playbin"
 #define WESTEROS_SINK 			"westerossink"
 #define MIN_FRAMES_DROP                 3
+#define TOTAL_RESOLUTIONS_COUNT         7 //All resolutions include 144p, 240p, 360p, 480p, 720p, 1080p, 2160p
 #define BUFFER_SIZE_LONG		1024
 #define BUFFER_SIZE_SHORT		264
 #define NORMAL_PLAYBACK_RATE		1.0
@@ -75,6 +76,8 @@ int videoEnd = 0;
 int videoStart =  0;
 int fps = 0;
 int totalFrames = 0;
+int ResolutionCount = 0;
+int height,width;
 int Runforseconds;
 auto start = std::chrono::steady_clock::now();
 bool latency_check_test = false;
@@ -85,8 +88,6 @@ bool use_fpsdisplaysink = true;
 int SecondChannelTimeout =0;
 bool ChannelChangeTest = false;
 GstClockTime timestamp, latency, time_elapsed;
-bool audioChanged = false;
-bool videoChanged = false;
 bool writeToFile= false;
 FILE *filePointer;
 bool justPrintPTS = false;
@@ -94,10 +95,13 @@ bool seekOperation = false;
 gint seekSeconds = 0;
 bool play_without_video = false;
 bool ResolutionTest = false;
+bool ResolutionSwitchTest = false;
 string resolution;
+bool resolution_test_up = true;
 bool with_pause = false;
 bool useProcForFPS = false;
 bool NoWesterosFor_fpsdisplaysink = false;
+bool UHD_Not_Supported = false;
 
 /*
  * Playbin flags
@@ -172,6 +176,8 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    gint previous_rendered_frames;
    //gint queued_frames;
    float drop_rate;
+   vector<int> resList;
+   int resItr = 0;
 
    /* Update data variables */
    data.playbin = playbin;
@@ -179,14 +185,28 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    data.terminate = FALSE;
    data.eosDetected = FALSE;
 
+   if (ResolutionSwitchTest)
+   {
+        resList.push_back(144);
+        resList.push_back(240);
+        resList.push_back(360);
+        resList.push_back(480);
+        resList.push_back(720);
+        resList.push_back(1080);
+	if (!UHD_Not_Supported)
+           resList.push_back(2160);
+        if (!resolution_test_up)
+           reverse(resList.begin(), resList.end());
+   }
+
    if (seekOperation)
    {
-	startPosition = seekSeconds * GST_SECOND;
+       startPosition = seekSeconds * GST_SECOND;
    }
    else
    {
-	gst_element_get_state (playbin, &cur_state, NULL, GST_SECOND);
-        fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
+       gst_element_get_state (playbin, &cur_state, NULL, GST_SECOND);
+       fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &startPosition), "Failed to query the current playback position");
    }
    g_object_get (playbin,"video-sink",&videoSinkFromPlaybin,NULL);
 
@@ -209,6 +229,10 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    printf("\nRunning for %d seconds, start Position is %lld\n",RunSeconds,startPosition/GST_SECOND);
    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
    previous_position = (currentPosition/GST_SECOND);
+   if (seekOperation)
+   {
+       previous_position = seekSeconds;
+   }
 
    if ((cur_state == GST_STATE_PAUSED)  && (state_change != GST_STATE_CHANGE_ASYNC))
    {
@@ -261,6 +285,24 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	play_jump = int(currentPosition/GST_SECOND) - previous_position;
 	printf("\nPlay jump = %d", play_jump);
 
+        if (ResolutionSwitchTest)
+	{
+            int new_height, new_width;
+	    g_object_get (videoSink, "video-height", &new_height, NULL);
+            g_object_get (videoSink, "video-width", &new_width, NULL);
+	    if (height == resList[resItr])
+	    {
+		ResolutionCount++;
+		resItr++;
+            }
+            if ( (new_height != height) || (new_width != width))
+            {
+                height = new_height;
+                width = new_width;
+                printf("\nVideo height = %d\nVideo width = %d", height, width);
+	        printf("\nres-comparison value = %d",resList[resItr]);
+            }	
+	}
 	if (use_fpsdisplaysink)
 	{
 	    g_object_get (videoSinkFromPlaybin,"frames-dropped",&dropped_frames,NULL);
@@ -322,6 +364,9 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	    old_pts = pts;
 	}
 
+	if ((jump_buffer == 0) && (ResolutionSwitchTest)) 
+             printf("\nVideo height = %d\nVideo width = %d", height, width);
+
 	fail_unless(jump_buffer != 0 , "Playback is not happening at the expected rate");
 	previous_position = (currentPosition/GST_SECOND);
 	if(videoUnderflowReceived && bufferUnderflowTest)
@@ -332,7 +377,11 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	    Sleep(3);
             return;
         }
-
+        if((ResolutionSwitchTest) && (ResolutionCount == TOTAL_RESOLUTIONS_COUNT))
+	{
+	   printf("\nPipeline played all resolutions\n");
+           break;
+	}
 	play_jump_previous = play_jump;
    }while((difference <= RunSeconds) && !data.terminate && !data.eosDetected);
 
@@ -567,6 +616,24 @@ int readFramesFromFile()
 }
 
 /********************************************************************************************************************
+Purpose:               To flush the pipeline using seek
+*********************************************************************************************************************/
+void flushPipeline(GstElement *playbin)
+{
+    gint64 currentPosition;
+    seekOperation = true;
+    printf("\nFlushing Pipeline after switch\n");
+    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &(currentPosition)),
+                                         "Failed to query the current playback position");
+    seekSeconds = currentPosition/GST_SECOND;
+    fail_unless (gst_element_seek (playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
+                                   GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, currentPosition,
+                                   GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE), "Failed to seek");
+    Sleep(1);
+    return;
+}
+
+/********************************************************************************************************************
 Purpose:               Callback function to set a variable to true on receiving first frame
 *********************************************************************************************************************/
 static void firstFrameCallback(GstElement *sink, guint size, void *context, gpointer data)
@@ -737,7 +804,6 @@ GST_START_TEST (test_generic_playback)
     GstMessage *message;
     GstBus *bus;
     MessageHandlerData data;
-    int height,width;
 
     /*
      * Create the playbin element
@@ -839,6 +905,10 @@ GST_START_TEST (test_generic_playback)
 	 PlaySeconds(playbin,play_timeout);
     }
 
+    if (ResolutionSwitchTest)
+    {
+	 fail_unless(ResolutionCount == TOTAL_RESOLUTIONS_COUNT,"\nNot able to play all resolutions\n");
+    }
     /*
      * Write FrameRate info to video_info file
      */
@@ -1038,8 +1108,6 @@ GST_START_TEST (test_play_pause_pipeline)
      * We are waiting for 5 more seconds before checking pipeline status, so reducing the wait here
      */
     PlaySeconds(playbin,play_timeout - 5);
-    int height;
-    int width;
     g_object_get (westerosSink, "video-height", &height, NULL);
     g_object_get (westerosSink, "video-width", &width, NULL);
     printf("\nVideo height = %d\nVideo width = %d", height, width);
@@ -1758,7 +1826,6 @@ GST_START_TEST (test_audio_change)
      * Check if the first frame received flag is set
      */
     fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
-    PlaySeconds(playbin,5);
     data.playbin = playbin;
     getStreamProperties(&data);
     fail_unless (1 < data.n_audio,"Stream has only 1 audio stream. Audio Change requires minimum of two audio streams");
@@ -1788,6 +1855,7 @@ GST_START_TEST (test_audio_change)
 		 printf("\nPausing pipeline before switching audio");
                  gst_element_set_state (data.playbin, GST_STATE_PAUSED);
 		 WaitForOperation;
+		 seekOperation = false;
 		 PlaySeconds(playbin,2);
 	     }
              printf("\nSwitching to audio stream %d\n", index);
@@ -1805,13 +1873,14 @@ GST_START_TEST (test_audio_change)
              }
 	     if (with_pause)
              {
-                 printf("\nSet pipeline to playing state");
+                 printf("\nSet pipeline to playing state\n");
                  gst_element_set_state (data.playbin, GST_STATE_PLAYING);
-                 WaitForOperation;
              }
+	     fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &(data.currentPosition)), "Failed to query the current playback position");
+	     flushPipeline(data.playbin);
              printf("\nSUCCESS : Switched to audio stream %d, Playing for %d seconds\n",index,play_timeout);
-	     PlaySeconds(playbin,play_timeout);
          }
+	 PlaySeconds(playbin,play_timeout);
     }
     /*
      * Check for AV status if its enabled
@@ -1949,6 +2018,21 @@ media_pipeline_suite (void)
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
+    else if (strcmp ("test_resolution_up", tcname) == 0)
+    {
+       ResolutionSwitchTest = true;
+       tcase_add_test (tc_chain, test_generic_playback);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_resolution_down", tcname) == 0)
+    {
+       ResolutionSwitchTest = true;
+       resolution_test_up = false;
+       tcase_add_test (tc_chain, test_generic_playback);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
     else
     {
        printf("\nNo such testcase is present in app");
@@ -2006,6 +2090,8 @@ int main (int argc, char **argv)
 	    (strcmp ("test_buffer_underflow_signal", tcname) == 0) ||
 	    (strcmp ("test_buffer_underflow_playback", tcname) == 0) ||
 	    (strcmp ("test_resolution", tcname) == 0) ||
+	    (strcmp ("test_resolution_down", tcname) == 0) ||
+	    (strcmp ("test_resolution_up", tcname) == 0) ||
 	    (strcmp ("test_playback_fps", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0))
 	{
@@ -2065,6 +2151,10 @@ int main (int argc, char **argv)
                     strtok (argv[arg], "=");
                     totalFrames = atoi (strtok (NULL, "="));
                 }
+		if (strstr (argv[arg], "4kNotSupported") != NULL)
+		{
+		    UHD_Not_Supported = true;
+		}    
             }
 
             printf ("\nArg : TestCase Name: %s \n", tcname);

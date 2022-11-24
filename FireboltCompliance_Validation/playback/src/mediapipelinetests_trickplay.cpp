@@ -23,6 +23,7 @@
 #include <vector>
 #include <cmath>
 #include <time.h>
+#include <sys/time.h>
 #include <sstream>
 #include <chrono>
 extern "C"
@@ -48,6 +49,9 @@ using namespace std;
                                              break; \
                                         }
 #define WaitForOperation                Sleep(5)
+#define PLAYBACK_RATE_TOLERANCE         0.03
+#define DEBUG_PRINT(f_, ...)            if (enable_trace) \
+                                            printf((f_), ##__VA_ARGS__)
 
 char m_play_url[BUFFER_SIZE_LONG] = {'\0'};
 char TDK_PATH[BUFFER_SIZE_SHORT] = {'\0'};
@@ -57,6 +61,7 @@ vector<string> operationsList;
  * Default values for avstatus check flag and play_timeout if not received as input arguments
  */
 
+bool enable_trace = false;
 bool checkAVStatus = false;
 int play_timeout = 10;
 int Runforseconds;
@@ -133,7 +138,8 @@ RunSeconds:               - The interval for which pipeline should be monitored
 static void PlaySeconds(GstElement* playbin,int RunSeconds)
 {
    gint64 currentPosition;
-   gint difference;
+   gfloat _currentPosition;
+   gfloat difference;
    GstMessage *message;
    GstBus *bus;
    MessageHandlerData data;
@@ -144,9 +150,9 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
    gdouble current_rate;
    GstElement *videoSink;
    GstState cur_state;
-   gint play_jump = 0;
-   gint play_jump_previous = 99;
-   gint previous_position = 0;
+   gfloat play_jump = 0;
+   gfloat play_jump_previous = 99;
+   gfloat previous_position = 0;
    gint jump_buffer = 1;
    gint jump_buffer_small_value = 3;
    GstStateChangeReturn state_change;
@@ -160,7 +166,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 
    g_object_get (playbin,"video-sink",&videoSink,NULL);
 
-   gst_element_get_state (playbin, &cur_state, NULL, GST_SECOND);
+   gst_element_get_state (playbin, &cur_state, NULL, (GST_SECOND));
 
    if (checkPTS)
    {	   
@@ -168,9 +174,10 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
        old_pts = pts;
    }
 
-   printf("\nRunning for %d seconds, start Position is %lld\n",RunSeconds,startPosition/GST_SECOND);
+   printf("\nRunning for %d seconds, start Position is %lld\n",RunSeconds,startPosition/(GST_SECOND));
    fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
-   previous_position = (currentPosition/GST_SECOND);
+   _currentPosition = currentPosition;
+   previous_position = (_currentPosition/(GST_SECOND));
 
    if (pause_operation)
    {
@@ -179,12 +186,14 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             Sleep(1);
             printf("Current State is PAUSED , waiting for %d\n", RunSeconds);
             fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
-            play_jump = int(currentPosition/GST_SECOND) - previous_position;
-            previous_position = (currentPosition/GST_SECOND);
+	    _currentPosition = currentPosition;
+            play_jump = (_currentPosition/(GST_SECOND)) - previous_position;
+            previous_position = (_currentPosition/(GST_SECOND));
 
-	    if (play_jump != 0)
+	    if (round(play_jump) != 0)
 		jump_buffer -=1;
 
+	    DEBUG_PRINT("\nin PAUSED state : jump_buffer : %d, play_jump : %f\n",jump_buffer,round(play_jump));
             fail_unless(jump_buffer != 0,"Playback is not PAUSED");
 
             if (checkPTS)
@@ -209,30 +218,40 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	jump_buffer = 3;
    }
    current_rate = getRate (playbin);
+   printf("\nCurrent Playback rate is %f\n",current_rate);
    bus = gst_element_get_bus (playbin);
    do
    {
 	Sleep(1);
         fail_unless (gst_element_query_position (playbin, GST_FORMAT_TIME, &currentPosition), "Failed to query the current playback position");
-        difference = int(abs((currentPosition/GST_SECOND) - (startPosition/GST_SECOND)));
-        printf("\nCurrent Position : %lld , Playing after operation for: %d",(currentPosition/GST_SECOND),difference);
-	
-	play_jump = int(currentPosition/GST_SECOND) - previous_position;
-	printf("\nPlay jump = %d", play_jump);
+	_currentPosition = currentPosition;
+        difference = abs((_currentPosition/(GST_SECOND)) - (startPosition/(GST_SECOND)));
+        printf("\nCurrent Position : %0.2f , Playing after operation for: %0.2f",(_currentPosition/(GST_SECOND)),difference);
+
+
+	DEBUG_PRINT("\nCurrent Position : %0.2f , Previous Position :%0.2f, jump_buffer : %d",(_currentPosition/(GST_SECOND)),previous_position,jump_buffer);
+	play_jump = (_currentPosition/(GST_SECOND)) - previous_position;
+	printf("\nPlay jump = %0.2f", play_jump);
 
 	if(!trickplay)
-	{
+	{  
+	    play_jump = round(play_jump);
+
            /*
             * Ignore if first jump is 0
             */
-            if ((play_jump != NORMAL_PLAYBACK_RATE) && !(((play_jump == 0) && (play_jump_previous == 99))))
+            if (((int)play_jump != (int)NORMAL_PLAYBACK_RATE) && !(((play_jump == 0) && (play_jump_previous == 99))))
+	    {
+		DEBUG_PRINT("\njump_buffer is reduced at line number %d\n", __LINE__);
+		DEBUG_PRINT("\tplay_jump %d, normal playback rate %d\n",(int)play_jump,(int)NORMAL_PLAYBACK_RATE);
                 jump_buffer -=1;
-
+            }
            /*
             * For small jumps until 2 , jump_buffer is 2
             */
-            if (((play_jump == 0) || (play_jump == 2) || (play_jump == -1)) && (jump_buffer == 0))
+            if ((jump_buffer == 0) && ((play_jump == 0) || (play_jump == 2) || (play_jump == -1)))
             {
+ 		DEBUG_PRINT("\njump_buffer is reduced at line number %d\n", __LINE__);
                 jump_buffer_small_value -=1;
                 jump_buffer = jump_buffer_small_value;
             }
@@ -242,18 +261,31 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             */
             if (((play_jump == 2) && (play_jump_previous == 0)) && (jump_buffer == 0))
             {
+		DEBUG_PRINT("\njump_buffer is reset at line number %d\n", __LINE__);
                 jump_buffer = 1;
             }
         }
         else
-	{	
-            if (current_rate >0 && (play_jump < current_rate))
-                jump_buffer -=1;
+	{
+	    if (round(current_rate) == current_rate)
+	    {
+	        if (round(play_jump) != current_rate)
+		{
+                   DEBUG_PRINT("\njump_buffer is reduced at line number %d play_jump - current_rate %f\n", __LINE__,abs(play_jump - current_rate));			
+		   jump_buffer -=1;
+		}
+	    }
+	    else
+	    {
+		if ((abs(play_jump - current_rate) > PLAYBACK_RATE_TOLERANCE) && ((abs((play_jump_previous + play_jump)/2) - current_rate) > PLAYBACK_RATE_TOLERANCE))
+		{
+		   DEBUG_PRINT("\njump_buffer is reduced at line number %d\n", __LINE__);
+		   jump_buffer -=1;
+		}
+	    }
         }
 
-        message = gst_bus_pop_filtered (bus, (GstMessageType) ((GstMessageType) GST_MESSAGE_STATE_CHANGED |
-                                             (GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS |
-                                             (GstMessageType) GST_MESSAGE_ASYNC_DONE ));
+        message = gst_bus_pop_filtered (bus, (GstMessageType) ((GstMessageType) GST_MESSAGE_ERROR | (GstMessageType) GST_MESSAGE_EOS));
         /*
          * Parse message
          */
@@ -274,7 +306,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
             fail_unless(jump_buffer != 0 , "Playback is not happening at the expected rate");
             old_pts = pts;
         }
-	previous_position = (currentPosition/GST_SECOND);
+	previous_position = (_currentPosition/(GST_SECOND));
         play_jump_previous = play_jump;
    
    }while((difference <= RunSeconds) && !data.terminate && !data.eosDetected);
@@ -285,7 +317,7 @@ static void PlaySeconds(GstElement* playbin,int RunSeconds)
 	printf("\nEnd of stream was detected, calling PlaySeconds agaifor remaining time %d\n",(RunSeconds-RanForTime));
 	PlaySeconds(playbin,RunSeconds-RanForTime);
    }
-   printf("\nExiting from PlaySeconds, currentPosition is %lld\n",currentPosition/GST_SECOND);
+   printf("\nExiting from PlaySeconds, currentPosition is %0.2f\n",_currentPosition/(GST_SECOND));
    gst_object_unref (bus);
 }
 
@@ -378,7 +410,7 @@ static void firstFrameCallback(GstElement *sink, guint size, void *context, gpoi
    bool *gotFirstFrameSignal = (bool*)data;
    printf ("Received first frame signal\n");
    fail_unless (gst_element_query_position (sink, GST_FORMAT_TIME, &currentposition), "Failed to query the current playback position");
-   printf("\nCurrent Position %lld\n",currentposition/GST_SECOND);
+   printf("\nCurrent Position %lld\n",currentposition/(GST_SECOND));
    /*
     * Set the Value to global variable once the first frame signal is received
     */
@@ -463,8 +495,8 @@ static void checkTrickplay(MessageHandlerData *Param)
                //Check if seek had already happened
                fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &(data.currentPosition)),
                                                      "Failed to query the current playback position");
-               //Added GST_SECOND buffer time between currentPosition and seekPosition
-               if (abs( data.currentPosition - data.seekPosition) <= (GST_SECOND))
+               //Added (GST_SECOND) buffer time between currentPosition and seekPosition
+               if (abs( data.currentPosition - data.seekPosition) <= ((GST_SECOND)))
                {
                    data.seeked = TRUE;
                    time_elapsed = std::chrono::high_resolution_clock::now();
@@ -546,8 +578,8 @@ static void handleMessage (MessageHandlerData *data, GstMessage *message)
             {
                fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &(data->currentPosition)),
                                                      "Failed to querry the current playback position");
-               //Added GST_SECOND buffer time between currentPosition and seekPosition
-               if (abs( data->currentPosition - data->seekPosition) <= (GST_SECOND))
+               //Added (GST_SECOND) buffer time between currentPosition and seekPosition
+               if (abs( data->currentPosition - data->seekPosition) <= ((GST_SECOND)))
                {
                    data->seeked = TRUE;
                    time_elapsed = std::chrono::high_resolution_clock::now();
@@ -578,7 +610,7 @@ static void trickplayOperation(MessageHandlerData *data)
     data->seeked = FALSE;
     if(!(data->setRateOperation))
     {
-	data->seekPosition = GST_SECOND * (data->seekSeconds);
+	data->seekPosition = (GST_SECOND) * (data->seekSeconds);
 	timestamp = std::chrono::high_resolution_clock::now();
 	fail_unless (gst_element_seek (data->playbin, NORMAL_PLAYBACK_RATE, GST_FORMAT_TIME,
                                    GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, data->seekPosition,
@@ -624,8 +656,8 @@ static void trickplayOperation(MessageHandlerData *data)
     if(!(data->setRateOperation))
     {
 	//Convert time to seconds
-        data->currentPosition /= GST_SECOND;
-        data->seekPosition /= GST_SECOND;
+        data->currentPosition /= (GST_SECOND);
+        data->seekPosition /= (GST_SECOND);
 	printf("\nCurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
         fail_unless (TRUE == data->seeked, "Seek Unsuccessfull\n");
         printf("\nSEEK SUCCESSFULL :  CurrentPosition %lld seconds, SeekPosition %lld seconds\n", data->currentPosition, data->seekPosition);
@@ -634,24 +666,24 @@ static void trickplayOperation(MessageHandlerData *data)
     else
     {
         fail_unless (data->setRate == data->currentRate, "Failed to do set rate to %f correctly\nCurrent playback rate is: %f\n", data->setRate, data->currentRate);
-        printf ("\nRate is set to %s %dx speed\n",(data->setRate > 0)?"fastforward":"rewind", (int)abs (data->setRate));
+        printf ("\nRate is set to %s %0.2fx speed\n",(data->setRate > 0)?"fastforward":"rewind", abs(data->setRate));
 	if (data->setRate < 0)
         {
 	    printf("\nIn negative rate handling");
 	    bool reached_start = false;
 	    gint64 previous_position;
 
-	    if (currentposition/GST_SECOND == 0)
+	    if (currentposition/(GST_SECOND) == 0)
 		reached_start = true;
 
-            int time_to_reach_start = (currentposition/GST_SECOND)/abs(data->currentRate);
+            int time_to_reach_start = (currentposition/(GST_SECOND))/abs(data->currentRate);
             start = std::chrono::high_resolution_clock::now();
 
 	    printf("\nTime to reach start = %d",time_to_reach_start);
             while(!reached_start)
             {
 	       previous_position = currentposition;
-               if ((currentposition/GST_SECOND) == 0)
+               if ((currentposition/(GST_SECOND)) == 0)
                {
                   reached_start = true;
                }
@@ -659,7 +691,7 @@ static void trickplayOperation(MessageHandlerData *data)
                   break;
                fail_unless (gst_element_query_position (data->playbin, GST_FORMAT_TIME, &currentposition), "Failed to query the current playback position");
 	       if (previous_position != currentposition)
-		  printf("\nCurrentPosition %lld seconds",(currentposition/GST_SECOND));
+		  printf("\nCurrentPosition %lld seconds",(currentposition/(GST_SECOND)));
 	    }
 
 	    if (reached_start)
@@ -834,13 +866,26 @@ GST_START_TEST (trickplayTest)
 	     */
 	    rate = REWIND3x_RATE;
 	}
+	else if ("slowMotion0.5x" == operationString)
+        {
+            /*
+             * Set the pipeline to 0.5x playback rate
+             */
+            rate = 0.5;
+        }
+	else if ("slowMotion0.75x" == operationString)
+        {
+            /*
+             * Set the pipeline to 0.75x playback rate
+             */
+            rate = 0.75;
+        }
 	else if ("rate" == operationString)
 	{
 	    /*
 	     * Set any rate mentioned
 	     */
-	     rate = atof(strtok(NULL, ":"));
-	     printf("\nRequested playback rate is %f",rate);
+	    rate = atof(strtok(NULL, ":"));
 	}
 	else if ("seek" == operationString)
         {
@@ -870,6 +915,7 @@ GST_START_TEST (trickplayTest)
 
 	if (rate != data.currentRate)
 	{
+	    printf("\nRequested playback rate is %f\n",rate);
 	    if (rate < 0)
             {
                 fail_unless (gst_element_query_duration (data.playbin, GST_FORMAT_TIME, &data.duration), "Failed to query the duration");
@@ -907,7 +953,7 @@ GST_START_TEST (trickplayTest)
 	    data.seekSeconds = seekSeconds;
 	    trickplayOperation(&data);
 	    seekOperation = false;
-	    startPosition = seekSeconds * GST_SECOND;
+	    startPosition = seekSeconds * (GST_SECOND);
 	    if (latency_check_test)
             {
                 latency = std::chrono::duration_cast<std::chrono::milliseconds>(time_elapsed - timestamp);
@@ -1009,6 +1055,12 @@ int main (int argc, char **argv)
         returnValue = 0;
         goto exit;
     }
+
+    if (getenv ("TDK_DEBUG") != NULL)
+    {
+        enable_trace = true;
+    }
+
     strcpy(m_play_url,argv[1]);
     for (arg = 2; arg < argc; arg++)
     {

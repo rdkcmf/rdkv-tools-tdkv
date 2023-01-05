@@ -55,6 +55,8 @@ using namespace std;
                                              break; \
                                         }
 #define WaitForOperation                Sleep(5)
+#define AUDIO_DATA                      "/CheckAudioStatus.sh getPTS "
+#define AUDIO_PTS_ERROR_FILE            "/audio_pts_error"
 
 char m_play_url[BUFFER_SIZE_LONG] = {'\0'};
 char tcname[BUFFER_SIZE_SHORT] = {'\0'};
@@ -102,6 +104,12 @@ bool with_pause = false;
 bool useProcForFPS = false;
 bool NoWesterosFor_fpsdisplaysink = false;
 bool UHD_Not_Supported = false;
+bool use_rialto = false;
+bool audio_underflow_received = false;
+bool audio_started  = false;
+bool audio_pts_error = false;
+bool AudioPTSCheckAvailable = false;
+bool Flush_Pipeline = true;
 
 /*
  * Playbin flags
@@ -433,6 +441,50 @@ bool getstreamingstatus(char* script)
 static void FPSCallback (GstElement *fpsdisplaysink, gdouble fps, gdouble droprate, gdouble avgfps, gpointer udata)
 {
    printf("\nDrop Rate:%lf \nCurrent FrameRate:%lf \nAvg Fps : %lf",droprate,fps,avgfps);
+}
+
+/******************************************************************************************************************
+ * Purpose:                Callback function to capture underflow signal from audiosink
+ *****************************************************************************************************************/
+static void AudioUndeflowCallback(GstElement *sink, guint size, void *context, gpointer data)
+{
+   bool *gotVideoUnderflow = (bool*)data;
+   printf ("\nERROR : Received buffer underflow signal from brcmaudiodecoder\n");
+   *gotVideoUnderflow = true;
+}
+
+/******************************************************************************************************************
+ * Purpose:                Callback function to capture first frame signal from audiosink
+ *****************************************************************************************************************/
+static void FirstFrameAudioCallback(GstElement *sink, guint size, void *context, gpointer data)
+{
+   bool *gotFirstFrameSignal = (bool*)data;
+   printf ("\nINFO : Received First Audio frame signal from brcmaudiodecoder\n");
+   *gotFirstFrameSignal = true;
+}
+
+/******************************************************************************************************************
+ * Purpose:                Callback function to capture pts error signal from audiosink
+ *****************************************************************************************************************/
+static void AudioPTSErrorCallback(GstElement *sink, guint size, void *context, gpointer data)
+{
+   bool *gotPTSerror = (bool*)data;
+   printf("\nERROR : Received Audio PTS error\n");
+   *gotPTSerror = true;
+}
+
+/******************************************************************************************************************
+ * Purpose:                Callback function to setup up element signals with callback functions
+ *****************************************************************************************************************/
+static void elementSetupCallback (GstElement* playbin, GstElement* element, gpointer user_data)
+{
+    if (g_str_has_prefix(GST_ELEMENT_NAME(element), "brcmaudiodecoder")) {
+        printf("\nGot brcmaudiodecoder\n");
+        g_object_set(G_OBJECT(element), "enable-svp", true , NULL);
+        g_signal_connect( element, "buffer-underflow-callback", G_CALLBACK(AudioUndeflowCallback), &audio_underflow_received);
+        g_signal_connect( element, "first-audio-frame-callback", G_CALLBACK(FirstFrameAudioCallback), &audio_started);
+        g_signal_connect( element, "pts-error-callback", G_CALLBACK(AudioPTSErrorCallback), &audio_pts_error);
+    }
 }
 
 /******************************************************************************************************************
@@ -799,7 +851,7 @@ GST_START_TEST (test_generic_playback)
     bool is_av_playing = false;
     GstElement *playbin;
     GstElement *westerosSink;
-    GstElement *fpssink;
+    GstElement *fpssink, *rialtovsink, *rialtoasink;
     gint flags;
     GstMessage *message;
     GstBus *bus;
@@ -823,10 +875,23 @@ GST_START_TEST (test_generic_playback)
     g_object_set (playbin, "flags", flags, NULL);
 
     /*
-     * Set westros-sink
+     * Set video-sink
      */
-    westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
-    fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    if (use_rialto)
+    {
+       rialtovsink = gst_element_factory_make("rialtomsevideosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomsevideosink' element");
+
+       rialtoasink = gst_element_factory_make("rialtomseaudiosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomseaudiosink' element");
+
+       g_object_set (playbin, "audio-sink", rialtoasink, NULL);
+    }
+    else
+    {
+        westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
+	fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    }
 
     /*
      * Link video-sink with playbin
@@ -839,25 +904,39 @@ GST_START_TEST (test_generic_playback)
         fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
         fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
         g_object_set (playbin, "video-sink",fpssink, NULL);
-        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+	if (use_rialto)
+	{
+	    g_object_set (fpssink, "video-sink", rialtovsink, NULL);
+	}
+	else
+	{
+            g_object_set (fpssink, "video-sink", westerosSink, NULL);
+	}
         g_object_set (fpssink, "signal-fps-measurements", true, NULL);
         g_object_set (fpssink, "fps-update-interval", 1000, NULL);
         g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
     }
+    else if(use_rialto)
+    {
+	g_object_set (playbin, "video-sink", rialtovsink, NULL);
+    }
     else
     {
-        g_object_set (playbin, "video-sink", westerosSink, NULL);
+	g_object_set (playbin, "video-sink", westerosSink, NULL);
     }
 
-    /*
-     * Set the first frame recieved callback
-     */
-    g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
-    /*
-     * Set the firstFrameReceived variable as false before starting play
-     */
-    firstFrameReceived= false;
-    
+    if (!use_rialto)
+    {
+       /*
+        * Set the first frame recieved callback
+        */
+        g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
+       /*
+        * Set the firstFrameReceived variable as false before starting play
+        */
+        firstFrameReceived= false;
+    }
+
     /*
      * Set playbin to PLAYING
      */
@@ -869,7 +948,8 @@ GST_START_TEST (test_generic_playback)
     /*
      * Check if the first frame received flag is set
      */
-    fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+    if (!use_rialto)
+        fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
 
     /*
      * Wait for 'play_timeout' seconds(recieved as the input argument) before checking AV status
@@ -885,8 +965,17 @@ GST_START_TEST (test_generic_playback)
     }
 
     data.playbin = playbin;
-    g_object_get (westerosSink, "video-height", &height, NULL);
-    g_object_get (westerosSink, "video-width", &width, NULL);
+    if (use_rialto)
+    {
+	 g_object_get (rialtovsink, "maxVideoHeight", &height, NULL);
+	 g_object_get (rialtovsink, "maxVideoWidth", &width, NULL);
+    }
+    else
+    {
+         g_object_get (westerosSink, "video-height", &height, NULL);
+         g_object_get (westerosSink, "video-width", &width, NULL);
+    }
+
     printf("\nVideo height = %d\nVideo width = %d", height, width);
 
     if (ResolutionTest)
@@ -1027,7 +1116,7 @@ GST_START_TEST (test_play_pause_pipeline)
     gint flags;
     GstState cur_state;
     GstElement *playbin;
-    GstElement *westerosSink;
+    GstElement *westerosSink, *rialtovsink, *rialtoasink;
     GstElement *fpssink;
     bool paused = false;
     GstMessage *message;
@@ -1054,40 +1143,67 @@ GST_START_TEST (test_play_pause_pipeline)
     g_object_set (playbin, "flags", flags, NULL);
 
     /*
-     * Create westerosSink instance
+     * Create videosink instance
      */
-    westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
-    fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    if (use_rialto)
+    {
+       rialtovsink = gst_element_factory_make("rialtomsevideosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomsevideosink' element");
+
+       rialtoasink = gst_element_factory_make("rialtomseaudiosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomseaudiosink' element");
+
+       g_object_set (playbin, "audio-sink", rialtoasink, NULL);
+    }
+    else
+    {
+       westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
+       fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    }
 
     /*
      * Link video-sink with playbin
      */
     if (use_fpsdisplaysink)
     {
-	/*
-	 * Create and link fpsdisplaysink if configuration is enabled
-	 */
+        /*
+         * Create and link fpsdisplaysink if configuration is enabled
+         */
         fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
-	fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
+        fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
         g_object_set (playbin, "video-sink",fpssink, NULL);
-        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        if (use_rialto)
+        {
+            g_object_set (fpssink, "video-sink", rialtovsink, NULL);
+        }
+        else
+        {
+            g_object_set (fpssink, "video-sink", westerosSink, NULL);
+        }
         g_object_set (fpssink, "signal-fps-measurements", true, NULL);
         g_object_set (fpssink, "fps-update-interval", 1000, NULL);
         g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
     }
+    else if(use_rialto)
+    {
+        g_object_set (playbin, "video-sink", rialtovsink, NULL);
+    }
     else
     {
-	g_object_set (playbin, "video-sink", westerosSink, NULL);
+        g_object_set (playbin, "video-sink", westerosSink, NULL);
     }
 
-    /*
-     * Set the first frame recieved callback
-     */
-    g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
-    /*
-     * Set the firstFrameReceived variable as false before starting play
-     */
-    firstFrameReceived= false;
+    if (!use_rialto)
+    {
+       /*
+        * Set the first frame recieved callback
+        */
+        g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
+       /*
+        * Set the firstFrameReceived variable as false before starting play
+        */
+        firstFrameReceived= false;
+    }
 
     /*
      * Set playbin to PLAYING
@@ -1098,18 +1214,29 @@ GST_START_TEST (test_play_pause_pipeline)
 
     WaitForOperation;
 
-    /*
-     * Check if the first frame received flag is set
-     */
-    fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+    if (!use_rialto)
+    {
+       /*
+        * Check if the first frame received flag is set
+        */
+        fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+    }
 
     /*
      * Wait for 'play_timeout' seconds(recieved as the input argument) before changing the pipeline state
      * We are waiting for 5 more seconds before checking pipeline status, so reducing the wait here
      */
     PlaySeconds(playbin,play_timeout - 5);
-    g_object_get (westerosSink, "video-height", &height, NULL);
-    g_object_get (westerosSink, "video-width", &width, NULL);
+    if (use_rialto)
+    {
+         g_object_get (rialtovsink, "maxVideoHeight", &height, NULL);
+         g_object_get (rialtovsink, "maxVideoWidth", &width, NULL);
+    }
+    else
+    {
+         g_object_get (westerosSink, "video-height", &height, NULL);
+         g_object_get (westerosSink, "video-width", &width, NULL);
+    }
     printf("\nVideo height = %d\nVideo width = %d", height, width);
 
     /*
@@ -1411,7 +1538,7 @@ GST_START_TEST (test_EOS)
     bool received_EOS = false;
     gint flags;
     GstElement *playbin;
-    GstElement *westerosSink;
+    GstElement *westerosSink, *rialtovsink, *rialtoasink;
     GstElement *fpssink;
 
     /*
@@ -1434,10 +1561,23 @@ GST_START_TEST (test_EOS)
     g_object_set (playbin, "flags", flags, NULL);
 
     /*
-     * Set westros-sink
+     * Set video-sink
      */
-    westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
-    fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    if (use_rialto)
+    {
+       rialtovsink = gst_element_factory_make("rialtomsevideosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomsevideosink' element");
+
+       rialtoasink = gst_element_factory_make("rialtomseaudiosink", NULL);
+       fail_unless (rialtovsink != NULL, "Failed to create 'rialtomseaudiosink' element");
+
+       g_object_set (playbin, "audio-sink", rialtoasink, NULL);
+    }
+    else
+    {
+        westerosSink = gst_element_factory_make(WESTEROS_SINK, NULL);
+	fail_unless (westerosSink != NULL, "Failed to create 'westerossink' element");
+    }
 
     /*
      * Link video-sink with playbin
@@ -1450,24 +1590,38 @@ GST_START_TEST (test_EOS)
         fpssink = gst_element_factory_make ("fpsdisplaysink", NULL);
         fail_unless (fpssink != NULL, "Failed to create 'fpsdisplaysink' element");
         g_object_set (playbin, "video-sink",fpssink, NULL);
-        g_object_set (fpssink, "video-sink", westerosSink, NULL);
+	if (use_rialto)
+	{
+	    g_object_set (fpssink, "video-sink", rialtovsink, NULL);
+	}
+	else
+	{
+            g_object_set (fpssink, "video-sink", westerosSink, NULL);
+	}
         g_object_set (fpssink, "signal-fps-measurements", true, NULL);
         g_object_set (fpssink, "fps-update-interval", 1000, NULL);
         g_signal_connect(fpssink, "fps-measurements", G_CALLBACK(FPSCallback), NULL);
     }
+    else if(use_rialto)
+    {
+	g_object_set (playbin, "video-sink", rialtovsink, NULL);
+    }
     else
     {
-        g_object_set (playbin, "video-sink", westerosSink, NULL);
+	g_object_set (playbin, "video-sink", westerosSink, NULL);
     }
 
-    /*
-     * Set the first frame recieved callback
-     */
-    g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
-    /*
-     * Set the firstFrameReceived variable as false before starting play
-     */
-    firstFrameReceived= false;
+    if (!use_rialto)
+    {
+       /*
+        * Set the first frame recieved callback
+        */
+        g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
+       /*
+        * Set the firstFrameReceived variable as false before starting play
+        */
+        firstFrameReceived= false;
+    }
 
     /*
      * Set playbin to PLAYING
@@ -1476,10 +1630,15 @@ GST_START_TEST (test_EOS)
     fail_unless (gst_element_set_state (playbin, GST_STATE_PLAYING) !=  GST_STATE_CHANGE_FAILURE);
     GST_FIXME( "Set to Playing State\n");
     WaitForOperation;
-    /*
-     * Check if the first frame received flag is set
-     */
-    fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+
+    if (!use_rialto)
+    {
+       /*
+        * Check if the first frame received flag is set
+        */
+        fail_unless (firstFrameReceived == true, "Failed to receive first video frame signal");
+    }
+
     /*
      * Wait for 5 seconds before checking AV status
      */
@@ -1750,6 +1909,7 @@ GST_END_TEST;
 GST_START_TEST (test_audio_change)
 {
     bool is_av_playing = false;
+    bool elementsetup = false;
     GstElement *playbin;
     GstElement *westerosSink;
     GstElement *fpssink;
@@ -1809,6 +1969,7 @@ GST_START_TEST (test_audio_change)
      * Set the first frame recieved callback
      */
     g_signal_connect( westerosSink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &firstFrameReceived);
+    g_signal_connect( playbin, "element-setup", G_CALLBACK(elementSetupCallback), &elementsetup);
     /*
      * Set the firstFrameReceived variable as false before starting play
      */
@@ -1822,6 +1983,16 @@ GST_START_TEST (test_audio_change)
     GST_FIXME( "Set to Playing State\n");
 
     WaitForOperation; 
+
+    if (AudioPTSCheckAvailable)
+    {
+         char audio_status[BUFFER_SIZE_SHORT] = {'\0'};
+         strcat (audio_status, TDK_PATH);
+         strcat (audio_status, AUDIO_DATA);
+         strcat (audio_status, " &");
+	     system(audio_status);
+    }
+
     /*
      * Check if the first frame received flag is set
      */
@@ -1877,10 +2048,23 @@ GST_START_TEST (test_audio_change)
                  gst_element_set_state (data.playbin, GST_STATE_PLAYING);
              }
 	     fail_unless (gst_element_query_position (data.playbin, GST_FORMAT_TIME, &(data.currentPosition)), "Failed to query the current playback position");
-	     flushPipeline(data.playbin);
+             if (Flush_Pipeline)
+             {
+                 flushPipeline(data.playbin);
+             }
              printf("\nSUCCESS : Switched to audio stream %d, Playing for %d seconds\n",index,play_timeout);
          }
 	 PlaySeconds(playbin,play_timeout);
+         fail_unless (audio_pts_error == false, "\nERROR : AUDIO PTS ERROR OBSERVED\n");
+         fail_unless (audio_underflow_received == false, "\nERROR : AUDIO UNDERFLOW OBSERVED\n");
+         if (AudioPTSCheckAvailable)
+         {
+             char audio_pts_status[BUFFER_SIZE_SHORT] = {'\0'};
+             strcat (audio_pts_status, TDK_PATH);
+             strcat (audio_pts_status, AUDIO_PTS_ERROR_FILE);
+             strcat (audio_pts_status, " &");
+             fail_unless(access(audio_pts_status, 0) == 0,"ERROR : AUDIO PTS ERROR OBSERVED\n");
+         }
     }
     /*
      * Check for AV status if its enabled
@@ -1996,6 +2180,30 @@ media_pipeline_suite (void)
        GST_INFO ("tc %s run successfull\n", tcname);
        GST_INFO ("SUCCESS\n");
     }
+    else if (strcmp ("test_rialto_playback", tcname) == 0)
+    {
+       use_rialto = true;
+       checkPTS=false;
+       tcase_add_test (tc_chain, test_generic_playback);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_rialto_play_pause", tcname) == 0)
+    {
+       use_rialto = true;
+       checkPTS=false;
+       tcase_add_test (tc_chain, test_play_pause_pipeline);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
+    else if (strcmp ("test_rialto_EOS", tcname) == 0)
+    {
+       use_rialto = true;
+       checkPTS=false;
+       tcase_add_test (tc_chain, test_EOS);
+       GST_INFO ("tc %s run successfull\n", tcname);
+       GST_INFO ("SUCCESS\n");
+    }
     else if (strcmp ("test_buffer_underflow_signal", tcname) == 0)
     {
        bufferUnderflowTest = true;
@@ -2070,6 +2278,10 @@ int main (int argc, char **argv)
     {
 	NoWesterosFor_fpsdisplaysink = true;
     }
+    if (getenv ("AUDIO_PTS_CHECK") != NULL)
+    {
+        AudioPTSCheckAvailable = true;
+    }
     if (argc == 2)
     {
     	strcpy (tcname, argv[1]);
@@ -2093,6 +2305,9 @@ int main (int argc, char **argv)
 	    (strcmp ("test_resolution_down", tcname) == 0) ||
 	    (strcmp ("test_resolution_up", tcname) == 0) ||
 	    (strcmp ("test_playback_fps", tcname) == 0) ||
+	    (strcmp ("test_rialto_playback", tcname) == 0) ||
+	    (strcmp ("test_rialto_play_pause", tcname) == 0) ||
+	    (strcmp ("test_rialto_EOS", tcname) == 0) ||
             (strcmp ("test_EOS", tcname) == 0))
 	{
 	    strcpy(m_play_url,argv[2]);
@@ -2154,7 +2369,11 @@ int main (int argc, char **argv)
 		if (strstr (argv[arg], "4kNotSupported") != NULL)
 		{
 		    UHD_Not_Supported = true;
-		}    
+		}
+                if (strstr (argv[arg], "withoutFlush") != NULL)
+                {
+                    Flush_Pipeline = false;
+                }
             }
 
             printf ("\nArg : TestCase Name: %s \n", tcname);
